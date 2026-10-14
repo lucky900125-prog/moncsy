@@ -10,6 +10,7 @@ import { parseStatementCsv, parseStatementXlsx, toTransactions } from "../revolu
 import { isoDate } from "../schemas.js";
 import { parseCamt, parseMt940, parseOfx } from "./formats.js";
 import { parsePdfStatement } from "./pdf.js";
+import { MAX_STATEMENT_ROWS, assertStatementRows, assertTextStatementSize } from "./limits.js";
 import { parseTabular, type Cell } from "./tabular.js";
 import { fold } from "./values.js";
 
@@ -93,6 +94,17 @@ export async function parseStatementFile(
   opts: ParseOptions,
   ai: AIProvider,
 ): Promise<StatementPreview> {
+  const preview = await readStatement(file, opts, ai);
+  // What the import would refuse anyway (statementImportSchema) is not offered in a preview either.
+  assertStatementRows(preview.transactions.length + preview.ignored + preview.errors.length);
+  return preview;
+}
+
+async function readStatement(
+  file: { filename: string; data: Buffer },
+  opts: ParseOptions,
+  ai: AIProvider,
+): Promise<StatementPreview> {
   const kind = sniffStatement(file.data, file.filename);
   const empty = { columns: [] as string[], mapping: {} as StatementMapping };
   if (kind === "xls") {
@@ -108,6 +120,7 @@ export async function parseStatementFile(
     return { format: "xlsx", ...parseTabular(rows, opts) };
   }
 
+  assertTextStatementSize(file.data);
   const text = decodeText(file.data);
   const start = text.trimStart().slice(0, 4000);
   if (/OFXHEADER|<OFX>/i.test(start)) return { format: "ofx", ...empty, ...parseOfx(text, opts.timeZone) };
@@ -142,7 +155,7 @@ const statementTxSchema = z.object({
   source: z.enum(["import", "revolut"]),
 });
 
-export const statementImportSchema = z.object({ transactions: z.array(z.unknown()).max(20000) });
+export const statementImportSchema = z.object({ transactions: z.array(z.unknown()).max(MAX_STATEMENT_ROWS) });
 
 /**
  * Saves the transactions the client confirmed from a preview. Each row is validated on its own; a row

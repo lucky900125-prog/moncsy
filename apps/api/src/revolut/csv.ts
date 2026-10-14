@@ -4,6 +4,7 @@ import type { RevolutStatus } from "@et/shared";
 import { getMeta, setMeta } from "../db.js";
 import { badRequest } from "../errors.js";
 import { decodeText, detectDelimiter } from "../io/text.js";
+import { assertStatementRows, assertTextStatementSize } from "../statements/limits.js";
 import type { Repository } from "../repository.js";
 import { categorize } from "./categorize.js";
 import { cellValue, loadWorkbook } from "../io/xlsx.js";
@@ -224,7 +225,9 @@ export async function importStatement(
     /\.xlsx$/i.test(file.filename) ||
     file.mimetype === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
     file.data.subarray(0, 2).toString("latin1") === "PK";
+  if (!isXlsx) assertTextStatementSize(file.data);
   const { rows, errors } = isXlsx ? await parseStatementXlsx(file.data) : parseStatementCsv(decodeText(file.data));
+  assertStatementRows(rows.length + errors.length);
   const { txs, ignored } = toTransactions(rows);
   let imported = 0;
   let skipped = ignored;
