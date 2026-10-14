@@ -1,12 +1,11 @@
 import { createHash } from "node:crypto";
 import { parse } from "csv-parse/sync";
-import ExcelJS from "exceljs";
 import type { RevolutStatus } from "@et/shared";
-import { getMeta, setMeta, transaction as dbTransaction } from "../db.js";
+import { getMeta, setMeta } from "../db.js";
 import { badRequest } from "../errors.js";
 import type { Repository } from "../repository.js";
 import { categorize } from "./categorize.js";
-import { cellValue } from "../io/xlsx.js";
+import { cellValue, loadWorkbook } from "../io/xlsx.js";
 import { META_CSV_ACCOUNTS, META_LAST_SYNC, type RevolutProvider } from "./types.js";
 
 /** One row of the Revolut app's "Account statement" export (Excel or CSV). */
@@ -47,11 +46,19 @@ const HEADER_ALIASES: Record<keyof StatementRow, string[]> = {
   balance: ["balance"],
 };
 
+/** One formatter per time zone: building one costs far more than using it, and a statement converts every row. */
+const tzFormats = new Map<string, Intl.DateTimeFormat>();
+
 /** Offset (ms) of `timeZone` from UTC at the given instant. */
 function tzOffset(utcMs: number, timeZone: string): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit",
-  }).formatToParts(new Date(utcMs));
+  let format = tzFormats.get(timeZone);
+  if (!format) {
+    format = new Intl.DateTimeFormat("en-US", {
+      timeZone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit",
+    });
+    tzFormats.set(timeZone, format);
+  }
+  const parts = format.formatToParts(new Date(utcMs));
   const get = (t: string) => Number(parts.find((p) => p.type === t)!.value);
   return Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second")) - utcMs;
 }
@@ -143,12 +150,7 @@ export function parseStatementCsv(text: string): { rows: StatementRow[]; errors:
 }
 
 export async function parseStatementXlsx(buf: Buffer): Promise<{ rows: StatementRow[]; errors: string[] }> {
-  const wb = new ExcelJS.Workbook();
-  try {
-    await wb.xlsx.load(buf as unknown as ArrayBuffer);
-  } catch (e) {
-    throw badRequest(`Not a readable XLSX file: ${(e as Error).message}`);
-  }
+  const wb = await loadWorkbook(buf, "Not a readable XLSX file");
   const ws = wb.worksheets[0];
   if (!ws) throw badRequest("The XLSX file has no worksheets");
   const header: string[] = [];
@@ -218,14 +220,14 @@ export async function importStatement(
   const { txs, ignored } = toTransactions(rows);
   let imported = 0;
   let skipped = ignored;
-  const known = new Set(repo.listCategories().map((c) => c.id));
-  dbTransaction(repo.db, () => {
+  const known = new Set((await repo.listCategories()).map((c) => c.id));
+  await repo.withTx(async (repo) => {
     for (const t of txs) {
-      if (repo.hasExternalId(t.externalId)) {
+      if (await repo.hasExternalId(t.externalId)) {
         skipped++;
         continue;
       }
-      repo.createTransaction({
+      await repo.createTransaction({
         amount: t.amount,
         currency: t.currency,
         date: t.date,
@@ -239,7 +241,7 @@ export async function importStatement(
     }
     // Remember the latest balance per product/currency so /revolut/status can show "accounts".
     const accounts = new Map<string, RevolutStatus["accounts"][number] & { at: string }>(
-      (JSON.parse(getMeta(repo.db, META_CSV_ACCOUNTS) ?? "[]") as (RevolutStatus["accounts"][number] & { at: string })[]).map((a) => [
+      (JSON.parse((await getMeta(repo.db, META_CSV_ACCOUNTS)) ?? "[]") as (RevolutStatus["accounts"][number] & { at: string })[]).map((a) => [
         a.id,
         a,
       ]),
@@ -251,8 +253,8 @@ export async function importStatement(
       const prev = accounts.get(id);
       if (!prev || prev.at <= at) accounts.set(id, { id, name: `${r.product || "Current"} (${r.currency})`, currency: r.currency, balance: r.balance, at });
     }
-    setMeta(repo.db, META_CSV_ACCOUNTS, JSON.stringify([...accounts.values()]));
-    setMeta(repo.db, META_LAST_SYNC, new Date().toISOString());
+    await setMeta(repo.db, META_CSV_ACCOUNTS, JSON.stringify([...accounts.values()]));
+    await setMeta(repo.db, META_LAST_SYNC, new Date().toISOString());
   });
   return { imported, skipped, errors };
 }
@@ -262,8 +264,8 @@ export class CsvRevolutProvider implements RevolutProvider {
   constructor(private readonly repo: Repository) {}
 
   async status(): Promise<RevolutStatus> {
-    const lastSyncAt = getMeta(this.repo.db, META_LAST_SYNC);
-    const accounts = (JSON.parse(getMeta(this.repo.db, META_CSV_ACCOUNTS) ?? "[]") as RevolutStatus["accounts"]).map(
+    const lastSyncAt = await getMeta(this.repo.db, META_LAST_SYNC);
+    const accounts = (JSON.parse((await getMeta(this.repo.db, META_CSV_ACCOUNTS)) ?? "[]") as RevolutStatus["accounts"]).map(
       ({ id, name, currency, balance }) => ({ id, name, currency, balance }),
     );
     return { connected: lastSyncAt !== null, mode: "csv", lastSyncAt, accounts };

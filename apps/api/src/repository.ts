@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Category, ReceiptItem, Summary, Transaction, TransactionSource } from "@et/shared";
-import { transaction, type DB } from "./db.js";
+import type { DB } from "./db.js";
 import { HttpError, badRequest, notFound } from "./errors.js";
 import type { CategoryCreate, CategoryPatch, TransactionCreate, TransactionPatch } from "./schemas.js";
 
@@ -75,62 +75,71 @@ export interface TransactionFilter {
 export class Repository {
   constructor(readonly db: DB) {}
 
+  /** Runs fn with a repository bound to one write transaction. */
+  withTx<T>(fn: (repo: Repository) => Promise<T>): Promise<T> {
+    return this.db.tx((db) => fn(new Repository(db)));
+  }
+
   // ---------- categories ----------
 
-  listCategories(): Category[] {
-    const rows = this.db.prepare("SELECT * FROM categories ORDER BY sort, name").all() as unknown as CategoryRow[];
+  async listCategories(): Promise<Category[]> {
+    const rows = await this.db.all<CategoryRow>("SELECT * FROM categories ORDER BY sort, name");
     return rows.map(rowToCategory);
   }
 
-  getCategory(id: string): Category | null {
-    const row = this.db.prepare("SELECT * FROM categories WHERE id = ?").get(id) as CategoryRow | undefined;
+  async getCategory(id: string): Promise<Category | null> {
+    const row = await this.db.get<CategoryRow>("SELECT * FROM categories WHERE id = ?", [id]);
     return row ? rowToCategory(row) : null;
   }
 
-  private assertCategory(id: string | null | undefined, field = "categoryId"): void {
-    if (id != null && !this.getCategory(id)) throw badRequest(`${field}: unknown category "${id}"`);
+  private async assertCategory(id: string | null | undefined, field = "categoryId"): Promise<void> {
+    if (id != null && !(await this.getCategory(id))) throw badRequest(`${field}: unknown category "${id}"`);
   }
 
-  createCategory(input: CategoryCreate, opts: { id?: string; isCustom?: boolean } = {}): Category {
-    this.assertCategory(input.parentId, "parentId");
+  async createCategory(input: CategoryCreate, opts: { id?: string; isCustom?: boolean } = {}): Promise<Category> {
+    await this.assertCategory(input.parentId, "parentId");
     const id = opts.id ?? randomUUID();
-    const sort = (this.db.prepare("SELECT COALESCE(MAX(sort), 0) + 1 AS s FROM categories").get() as { s: number }).s;
-    this.db
-      .prepare(
-        "INSERT INTO categories (id, name, icon, color, is_custom, parent_id, budget, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-      )
-      .run(id, input.name, input.icon, input.color, opts.isCustom === false ? 0 : 1, input.parentId ?? null, input.budget ?? null, sort);
-    return this.getCategory(id)!;
+    const sort = (await this.db.get<{ s: number }>("SELECT COALESCE(MAX(sort), 0) + 1 AS s FROM categories"))!.s;
+    await this.db.run(
+      "INSERT INTO categories (id, name, icon, color, is_custom, parent_id, budget, sort) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      [id, input.name, input.icon, input.color, opts.isCustom === false ? 0 : 1, input.parentId ?? null, input.budget ?? null, sort],
+    );
+    return (await this.getCategory(id))!;
   }
 
-  updateCategory(id: string, patch: CategoryPatch): Category {
-    const cur = this.getCategory(id);
+  async updateCategory(id: string, patch: CategoryPatch): Promise<Category> {
+    const cur = await this.getCategory(id);
     if (!cur) throw notFound(`Category "${id}" not found`);
     if (patch.parentId !== undefined) {
       if (patch.parentId === id) throw badRequest("parentId: a category cannot be its own parent");
-      this.assertCategory(patch.parentId, "parentId");
+      await this.assertCategory(patch.parentId, "parentId");
     }
     const next = { ...cur, ...stripUndefined(patch) };
-    this.db
-      .prepare("UPDATE categories SET name = ?, icon = ?, color = ?, parent_id = ?, budget = ? WHERE id = ?")
-      .run(next.name, next.icon, next.color, next.parentId ?? null, next.budget ?? null, id);
-    return this.getCategory(id)!;
+    await this.db.run("UPDATE categories SET name = ?, icon = ?, color = ?, parent_id = ?, budget = ? WHERE id = ?", [
+      next.name,
+      next.icon,
+      next.color,
+      next.parentId ?? null,
+      next.budget ?? null,
+      id,
+    ]);
+    return (await this.getCategory(id))!;
   }
 
-  deleteCategory(id: string): void {
-    const cur = this.getCategory(id);
+  async deleteCategory(id: string): Promise<void> {
+    const cur = await this.getCategory(id);
     if (!cur) throw notFound(`Category "${id}" not found`);
     if (!cur.isCustom) throw new HttpError(409, `Category "${cur.name}" is built in and cannot be deleted`);
-    transaction(this.db, () => {
-      this.db.prepare("UPDATE transactions SET category_id = NULL WHERE category_id = ?").run(id);
-      this.db.prepare("UPDATE categories SET parent_id = NULL WHERE parent_id = ?").run(id);
-      this.db.prepare("DELETE FROM categories WHERE id = ?").run(id);
+    await this.db.tx(async (db) => {
+      await db.run("UPDATE transactions SET category_id = NULL WHERE category_id = ?", [id]);
+      await db.run("UPDATE categories SET parent_id = NULL WHERE parent_id = ?", [id]);
+      await db.run("DELETE FROM categories WHERE id = ?", [id]);
     });
   }
 
   // ---------- transactions ----------
 
-  listTransactions(f: TransactionFilter = {}): Transaction[] {
+  async listTransactions(f: TransactionFilter = {}): Promise<Transaction[]> {
     const where: string[] = [];
     const params: (string | number)[] = [];
     if (f.from) {
@@ -149,7 +158,7 @@ export class Repository {
       }
     }
     const sql = `SELECT * FROM transactions ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY date DESC, id`;
-    let rows = this.db.prepare(sql).all(...params) as unknown as TransactionRow[];
+    let rows = await this.db.all<TransactionRow>(sql, params);
     if (f.q && f.q.trim()) {
       // SQLite's LOWER() is ASCII-only, so match case-insensitively in JS for Hungarian accents.
       const needle = f.q.trim().toLocaleLowerCase("hu");
@@ -158,27 +167,25 @@ export class Repository {
     return rows.map(rowToTransaction);
   }
 
-  getTransaction(id: string): Transaction | null {
-    const row = this.db.prepare("SELECT * FROM transactions WHERE id = ?").get(id) as TransactionRow | undefined;
+  async getTransaction(id: string): Promise<Transaction | null> {
+    const row = await this.db.get<TransactionRow>("SELECT * FROM transactions WHERE id = ?", [id]);
     return row ? rowToTransaction(row) : null;
   }
 
-  hasExternalId(externalId: string): boolean {
-    return !!this.db.prepare("SELECT 1 FROM transactions WHERE external_id = ?").get(externalId);
+  async hasExternalId(externalId: string): Promise<boolean> {
+    return !!(await this.db.get("SELECT 1 FROM transactions WHERE external_id = ?", [externalId]));
   }
 
-  createTransaction(input: TransactionCreate, opts: { id?: string } = {}): Transaction {
-    this.assertCategory(input.categoryId);
-    if (input.externalId && this.hasExternalId(input.externalId)) {
+  async createTransaction(input: TransactionCreate, opts: { id?: string } = {}): Promise<Transaction> {
+    await this.assertCategory(input.categoryId);
+    if (input.externalId && (await this.hasExternalId(input.externalId))) {
       throw new HttpError(409, `A transaction with externalId "${input.externalId}" already exists`);
     }
     const id = opts.id ?? randomUUID();
-    this.db
-      .prepare(
-        `INSERT INTO transactions (id, amount, currency, date, merchant, note, category_id, source, items, external_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
+    await this.db.run(
+      `INSERT INTO transactions (id, amount, currency, date, merchant, note, category_id, source, items, external_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
         id,
         input.amount,
         input.currency.toUpperCase(),
@@ -189,26 +196,25 @@ export class Repository {
         input.source ?? "manual",
         input.items ? JSON.stringify(input.items) : null,
         input.externalId ?? null,
-      );
-    return this.getTransaction(id)!;
+      ],
+    );
+    return (await this.getTransaction(id))!;
   }
 
-  updateTransaction(id: string, patch: TransactionPatch): Transaction {
-    const cur = this.getTransaction(id);
+  async updateTransaction(id: string, patch: TransactionPatch): Promise<Transaction> {
+    const cur = await this.getTransaction(id);
     if (!cur) throw notFound(`Transaction "${id}" not found`);
-    if (patch.categoryId !== undefined) this.assertCategory(patch.categoryId);
-    if (patch.externalId && patch.externalId !== cur.externalId && this.hasExternalId(patch.externalId)) {
+    if (patch.categoryId !== undefined) await this.assertCategory(patch.categoryId);
+    if (patch.externalId && patch.externalId !== cur.externalId && (await this.hasExternalId(patch.externalId))) {
       throw new HttpError(409, `A transaction with externalId "${patch.externalId}" already exists`);
     }
     const p = stripUndefined(patch);
     const note = "note" in p ? p.note : cur.note ?? null;
     const items = "items" in p ? p.items : cur.items ?? null;
-    this.db
-      .prepare(
-        `UPDATE transactions SET amount = ?, currency = ?, date = ?, merchant = ?, note = ?, category_id = ?, source = ?, items = ?, external_id = ?
-         WHERE id = ?`,
-      )
-      .run(
+    await this.db.run(
+      `UPDATE transactions SET amount = ?, currency = ?, date = ?, merchant = ?, note = ?, category_id = ?, source = ?, items = ?, external_id = ?
+       WHERE id = ?`,
+      [
         p.amount ?? cur.amount,
         (p.currency ?? cur.currency).toUpperCase(),
         p.date ? toIso(p.date) : cur.date,
@@ -219,13 +225,14 @@ export class Repository {
         items ? JSON.stringify(items) : null,
         "externalId" in p ? (p.externalId ?? null) : (cur.externalId ?? null),
         id,
-      );
-    return this.getTransaction(id)!;
+      ],
+    );
+    return (await this.getTransaction(id))!;
   }
 
-  deleteTransaction(id: string): void {
-    const r = this.db.prepare("DELETE FROM transactions WHERE id = ?").run(id);
-    if (Number(r.changes) === 0) throw notFound(`Transaction "${id}" not found`);
+  async deleteTransaction(id: string): Promise<void> {
+    const r = await this.db.run("DELETE FROM transactions WHERE id = ?", [id]);
+    if (r.changes === 0) throw notFound(`Transaction "${id}" not found`);
   }
 
   // ---------- summary ----------
@@ -236,32 +243,29 @@ export class Repository {
    * income / expense are non-negative magnitudes; byCategory[].total is the signed sum
    * (negative for spending), sorted by largest spend first.
    */
-  summary(from: string, to: string, currency: string | undefined, defaultCurrency: string): Summary {
+  async summary(from: string, to: string, currency: string | undefined, defaultCurrency: string): Promise<Summary> {
     const lo = toIso(from);
     const hi = rangeEnd(to);
     let cur = currency?.toUpperCase();
     if (!cur) {
-      const top = this.db
-        .prepare(
-          "SELECT currency, COUNT(*) AS n FROM transactions WHERE date >= ? AND date <= ? GROUP BY currency ORDER BY n DESC, currency LIMIT 1",
-        )
-        .get(lo, hi) as { currency: string } | undefined;
+      const top = await this.db.get<{ currency: string }>(
+        "SELECT currency, COUNT(*) AS n FROM transactions WHERE date >= ? AND date <= ? GROUP BY currency ORDER BY n DESC, currency LIMIT 1",
+        [lo, hi],
+      );
       cur = top?.currency ?? defaultCurrency;
     }
-    const totals = this.db
-      .prepare(
-        `SELECT COALESCE(SUM(CASE WHEN amount > 0 THEN amount END), 0) AS income,
-                COALESCE(SUM(CASE WHEN amount < 0 THEN -amount END), 0) AS expense
-         FROM transactions WHERE date >= ? AND date <= ? AND currency = ?`,
-      )
-      .get(lo, hi, cur) as { income: number; expense: number };
-    const byCategory = this.db
-      .prepare(
-        `SELECT category_id AS categoryId, SUM(amount) AS total, COUNT(*) AS count
-         FROM transactions WHERE date >= ? AND date <= ? AND currency = ?
-         GROUP BY category_id ORDER BY total ASC`,
-      )
-      .all(lo, hi, cur) as unknown as { categoryId: string | null; total: number; count: number }[];
+    const totals = (await this.db.get<{ income: number; expense: number }>(
+      `SELECT COALESCE(SUM(CASE WHEN amount > 0 THEN amount END), 0) AS income,
+              COALESCE(SUM(CASE WHEN amount < 0 THEN -amount END), 0) AS expense
+       FROM transactions WHERE date >= ? AND date <= ? AND currency = ?`,
+      [lo, hi, cur],
+    ))!;
+    const byCategory = await this.db.all<{ categoryId: string | null; total: number; count: number }>(
+      `SELECT category_id AS categoryId, SUM(amount) AS total, COUNT(*) AS count
+       FROM transactions WHERE date >= ? AND date <= ? AND currency = ?
+       GROUP BY category_id ORDER BY total ASC`,
+      [lo, hi, cur],
+    );
     return {
       from: lo,
       to: hi,

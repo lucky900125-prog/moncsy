@@ -1,0 +1,16 @@
+{
+  // Bundlers, Metro, tsx and vitest read src/ directly. dist/ exists only for the compiled API, which
+  // selects it with `node --conditions=et-dist` (see apps/api/package.json "start").
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "rewriteRelativeImportExtensions": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "declaration": false
+  },
+  "include": ["src"]
+}

@@ -16,11 +16,20 @@ export interface Category {
   budget?: number | null;
 }
 
+export type PackUnit = "g" | "kg" | "ml" | "l" | "db";
+
 export interface ReceiptItem {
+  /** the line as printed on the receipt */
   name: string;
   quantity: number;
   unitPrice: number;
   total: number;
+  /** generic product type in Hungarian, lower case ("tej", "kenyér"); null when unknown */
+  product?: string | null;
+  brand?: string | null;
+  /** package size with packUnit, e.g. 1 + "l"; for goods sold by weight 1 + "kg" (unitPrice is then per kg) */
+  packSize?: number | null;
+  packUnit?: PackUnit | null;
 }
 
 export interface Transaction {
@@ -69,6 +78,19 @@ export interface AnalyzeRequest {
   from: string;
   to: string;
   question?: string;
+  /** "spending" (default): categories, merchants, months. "products": receipt line items and store prices. */
+  scope?: "spending" | "products";
+  /** scope "products" only: narrows the products sent to the AI. Matching ignores case and accents. */
+  products?: ProductFilter;
+}
+
+export interface ProductFilter {
+  /** part of the product name or of the receipt line, e.g. "tej" */
+  q?: string;
+  /** the brand, e.g. "Mizo" */
+  brand?: string;
+  /** only products bought at least once in this store, e.g. "Spar"; the other stores stay in for comparison */
+  merchant?: string;
 }
 
 export interface Insight {
@@ -84,6 +106,21 @@ export interface AnalyzeResponse {
   insights: Insight[];
 }
 
+/** GET /backup/status. The copy of the database in a private GitHub repository, for hosts whose disk is wiped on restart. */
+export interface BackupStatus {
+  enabled: boolean;
+  /** when the newest copy was made; survives restarts, since it is restored with the database */
+  lastBackupAt: string | null;
+  /** generation of the newest copy this database knows of; counts up by one per upload */
+  generation: number | null;
+  /** the last upload failed with this; uploads are retried */
+  lastError: string | null;
+  /** changes are waiting to be uploaded */
+  pending: boolean;
+  /** uploads stopped because the remote copy is not the one this database came from; lastError says why. Needs a restart. */
+  stopped: boolean;
+}
+
 export interface RevolutStatus {
   connected: boolean;
   mode: "business-api" | "open-banking" | "csv" | null;
@@ -91,8 +128,53 @@ export interface RevolutStatus {
   accounts: { id: string; name: string; currency: string; balance: number }[];
 }
 
-/** HTTP contract (prefix /api):
+export type StatementFormat = "csv" | "xlsx" | "camt" | "ofx" | "mt940" | "pdf" | "revolut";
+
+/** Columns a tabular statement can be mapped to; amount alone or debit + credit carry the money. */
+export type StatementRole =
+  | "date"
+  | "valueDate"
+  | "amount"
+  | "debit"
+  | "credit"
+  | "direction"
+  | "currency"
+  | "counterparty"
+  | "description"
+  | "type"
+  | "balance"
+  | "reference";
+
+export type StatementMapping = Partial<Record<StatementRole, string>>;
+
+/** A transaction read from a bank statement, not yet saved. externalId makes re-imports idempotent. */
+export interface StatementTx {
+  externalId: string;
+  date: string;
+  amount: number;
+  currency: string;
+  merchant: string;
+  note?: string;
+  categoryId: string | null;
+  source: "import" | "revolut";
+}
+
+export interface StatementPreview {
+  format: StatementFormat;
+  /** tabular formats only: the header row found in the file and how it was mapped */
+  columns: string[];
+  mapping: StatementMapping;
+  currency: string | null;
+  transactions: StatementTx[];
+  /** rows that are not transactions (pending, internal exchange, opening balance) */
+  ignored: number;
+  errors: string[];
+}
+
+/** HTTP contract (prefix /api). When the server has API_TOKEN set, every route except /health
+ *  needs "Authorization: Bearer <token>".
  *  GET    /health
+ *  GET    /backup/status               -> BackupStatus
  *  GET    /categories                  -> Category[]
  *  POST   /categories                  body Omit<Category,"id"|"isCustom"> -> Category (isCustom=true)
  *  PATCH  /categories/:id              -> Category
@@ -107,6 +189,11 @@ export interface RevolutStatus {
  *  POST   /revolut/sync                -> { imported: number; skipped: number }
  *  POST   /revolut/import-statement    multipart "file" (Revolut CSV/XLSX statement) -> { imported; skipped }
  *  POST   /ai/analyze                  AnalyzeRequest -> AnalyzeResponse
+ *  POST   /statements/parse            multipart "file" (any bank's CSV/XLSX, CAMT.053 XML, OFX, MT940, PDF) and optional
+ *                                      fields "mapping" (StatementMapping JSON), "currency" sent before the file -> StatementPreview
+ *  POST   /statements/import           { transactions: StatementTx[] } -> { imported; skipped; errors: string[] }
+ *  GET    /products?from&to            -> { products: ProductStat[]; stores: StoreRank[] } (from receipt line items;
+ *                                      types in "@et/shared/products")
  *  POST   /import                      multipart "file" (.xlsx | .xml) -> { imported; skipped; errors: string[] }
  *  GET    /export?format=xlsx|xml&from&to -> file download
  */

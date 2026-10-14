@@ -18,6 +18,10 @@ export const receiptItemSchema = z.object({
   quantity: z.number().finite(),
   unitPrice: z.number().finite(),
   total: z.number().finite(),
+  product: z.string().trim().max(120).nullable().optional(),
+  brand: z.string().trim().max(120).nullable().optional(),
+  packSize: z.number().finite().positive().nullable().optional(),
+  packUnit: z.enum(["g", "kg", "ml", "l", "db"]).nullable().optional(),
 });
 
 export const categoryCreateSchema = z.object({
@@ -73,6 +77,20 @@ export const analyzeRequestSchema = z.object({
   from: isoDate,
   to: isoDate,
   question: z.string().max(2000).optional(),
+  scope: z.enum(["spending", "products"]).default("spending"),
+  products: z
+    .object({
+      q: z.string().trim().max(120).optional(),
+      brand: z.string().trim().max(120).optional(),
+      merchant: z.string().trim().max(200).optional(),
+    })
+    .strict()
+    .optional(),
+});
+
+export const productQuerySchema = z.object({
+  from: isoDate.optional(),
+  to: isoDate.optional(),
 });
 
 export const exportQuerySchema = z.object({

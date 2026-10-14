@@ -4,12 +4,12 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   },
   "scripts": {
     "dev": "tsx watch --disable-warning=ExperimentalWarning src/index.ts",
-    "build": "tsc -p tsconfig.build.json",
-    "start": "node --disable-warning=ExperimentalWarning dist/index.js",
+    "build": "tsc -p ../../packages/shared/tsconfig.build.json && tsc -p tsconfig.build.json",
+    "start": "node --conditions=et-dist --disable-warning=ExperimentalWarning dist/index.js",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

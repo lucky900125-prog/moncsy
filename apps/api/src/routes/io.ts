@@ -21,8 +21,8 @@ export async function ioRoutes(app: FastifyInstance, { repo }: AppDeps): Promise
   app.get("/export", async (req, reply) => {
     const q = parseOrThrow(exportQuerySchema, req.query, "query");
     const payload = {
-      categories: repo.listCategories(),
-      transactions: repo.listTransactions({ from: q.from, to: q.to }).reverse(),
+      categories: await repo.listCategories(),
+      transactions: (await repo.listTransactions({ from: q.from, to: q.to })).reverse(),
     };
     const stamp = new Date().toISOString().slice(0, 10);
     if (q.format === "xml") {

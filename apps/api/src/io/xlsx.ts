@@ -1,11 +1,33 @@
 import ExcelJS from "exceljs";
-import { badRequest } from "../errors.js";
+import { HttpError, badRequest } from "../errors.js";
 import type { ExportPayload, ImportPayload, RawRecord } from "./common.js";
+import { UnpackedTooLargeError, assertUnpackedSize } from "./zip.js";
+
+/** What an uploaded workbook may unpack to. A bank statement of several thousand rows is about 2 MB. */
+export const MAX_XLSX_UNPACKED_BYTES = 20 * 1024 * 1024;
+
+/** Loads an uploaded workbook once it is known to unpack to a size that fits in memory; `failure` starts the 400 message. */
+export async function loadWorkbook(buf: Buffer, failure: string): Promise<ExcelJS.Workbook> {
+  try {
+    assertUnpackedSize(buf, MAX_XLSX_UNPACKED_BYTES);
+  } catch (e) {
+    if (e instanceof UnpackedTooLargeError) throw new HttpError(413, `The XLSX file ${e.message}; split it into smaller files`);
+    throw badRequest(`${failure}: ${(e as Error).message}`);
+  }
+  const wb = new ExcelJS.Workbook();
+  try {
+    await wb.xlsx.load(buf as unknown as ArrayBuffer);
+  } catch (e) {
+    throw badRequest(`${failure}: ${(e as Error).message}`);
+  }
+  return wb;
+}
 
 /*
  * Workbook layout (first row = header, column order irrelevant on import):
  *   Transactions: id | date (ISO 8601 text) | amount | currency | merchant | categoryId | category (name, informational)
- *                 | note | source | externalId | items (JSON array of {name,quantity,unitPrice,total})
+ *                 | note | source | externalId | items (JSON array of {name,quantity,unitPrice,total} and optionally
+ *                   product, brand, packSize, packUnit)
  *   Categories:   id | name | icon | color | isCustom | parentId | budget
  * On import a transaction may give a category name instead of a categoryId.
  */
@@ -85,12 +107,7 @@ function sheetRecords(ws: ExcelJS.Worksheet | undefined, sheet: string): RawReco
 }
 
 export async function parseXlsx(buf: Buffer): Promise<ImportPayload> {
-  const wb = new ExcelJS.Workbook();
-  try {
-    await wb.xlsx.load(buf as unknown as ArrayBuffer);
-  } catch (e) {
-    throw badRequest(`Could not read XLSX file: ${(e as Error).message}`);
-  }
+  const wb = await loadWorkbook(buf, "Could not read XLSX file");
   const find = (name: string) => wb.worksheets.find((w) => w.name.trim().toLowerCase() === name.toLowerCase());
   const txSheet = find("Transactions") ?? (find("Categories") ? undefined : wb.worksheets[0]);
   if (!txSheet && !find("Categories")) throw badRequest('XLSX must contain a "Transactions" and/or "Categories" sheet');

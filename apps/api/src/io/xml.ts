@@ -16,7 +16,8 @@ import type { ExportPayload, ImportPayload, RawRecord } from "./common.js";
  *     <transaction id="…" source="manual">
  *       <date>2026-10-12T00:00:00.000Z</date><amount>-4785</amount><currency>HUF</currency>
  *       <merchant>SPAR</merchant><categoryId>groceries</categoryId><note>…</note><externalId>…</externalId>
- *       <items><item><name>Tej</name><quantity>2</quantity><unitPrice>389</unitPrice><total>778</total></item></items>
+ *       <items><item><name>Tej</name><quantity>2</quantity><unitPrice>389</unitPrice><total>778</total>
+ *         <product>tej</product><brand>Mizo</brand><packSize>1</packSize><packUnit>l</packUnit></item></items>
  *     </transaction>
  *   </transactions>
  * </expenses>
@@ -60,7 +61,7 @@ export function exportXml(p: ExportPayload, exportedAt = new Date().toISOString(
           categoryId: opt(t.categoryId),
           note: opt(t.note),
           externalId: opt(t.externalId),
-          items: t.items ? { item: t.items } : undefined,
+          items: t.items ? { item: t.items.map((i) => Object.fromEntries(Object.entries(i).filter(([, v]) => v != null))) } : undefined,
         })),
       },
     },

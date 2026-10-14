@@ -4,5 +4,23 @@
   "private": true,
   "type": "module",
   "main": "src/index.ts",
-  "types": "src/index.ts"
+  "types": "src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "et-dist": "./dist/index.js",
+      "default": "./src/index.ts"
+    },
+    "./products": {
+      "types": "./src/products.ts",
+      "et-dist": "./dist/products.js",
+      "default": "./src/products.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  }
 }

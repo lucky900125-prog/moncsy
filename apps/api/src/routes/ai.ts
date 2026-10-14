@@ -3,7 +3,7 @@ import { readUpload, type AppDeps } from "../app.js";
 import { HttpError } from "../errors.js";
 import { toIso, rangeEnd } from "../repository.js";
 import { analyzeRequestSchema, parseOrThrow } from "../schemas.js";
-import { aggregate, analyze } from "../services/analyze.js";
+import { aggregate, analyze, productAggregate } from "../services/analyze.js";
 import { scanReceipt } from "../services/receipt.js";
 
 const ACCEPTED = new Set(["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif", "application/pdf"]);
@@ -36,13 +36,25 @@ export async function aiRoutes(app: FastifyInstance, { repo, ai, config }: AppDe
     if (!ACCEPTED.has(mime)) {
       throw new HttpError(415, `Unsupported file type ${mime}; send JPEG, PNG, WebP, HEIC or PDF`);
     }
-    return scanReceipt(ai, repo.listCategories(), file.data.toString("base64"), mime);
+    return scanReceipt(ai, await repo.listCategories(), file.data.toString("base64"), mime);
   });
 
   app.post("/ai/analyze", async (req) => {
     const body = parseOrThrow(analyzeRequestSchema, req.body, "analyze request");
-    const txs = repo.listTransactions({ from: body.from, to: body.to });
-    const agg = aggregate(txs, repo.listCategories(), toIso(body.from), rangeEnd(body.to), config.defaultCurrency);
+    const txs = await repo.listTransactions({ from: body.from, to: body.to });
+    if (body.scope === "products") {
+      const agg = productAggregate(txs, toIso(body.from), rangeEnd(body.to), body.products);
+      if (agg.products.length === 0) {
+        throw new HttpError(
+          422,
+          agg.filter
+            ? "No receipt line items in this period match the product filter."
+            : "No receipt line items in this period yet; scan receipts to compare product prices.",
+        );
+      }
+      return analyze(ai, body, agg);
+    }
+    const agg = aggregate(txs, await repo.listCategories(), toIso(body.from), rangeEnd(body.to), config.defaultCurrency);
     return analyze(ai, body, agg);
   });
 }

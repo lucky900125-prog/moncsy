@@ -61,6 +61,16 @@ describe("POST /api/receipts/scan (mock provider)", () => {
     }
   });
 
+  it("keeps the scan when only a product detail of a line is off", async () => {
+    const item = { name: "Tej", unitPrice: 459, total: 459, product: "", brand: "", packSize: 0, packUnit: "L" };
+    const answer = JSON.stringify({ merchant: "Spar", date: "2026-10-01", total: 459, currency: "HUF", items: [item], suggestedCategoryId: null, confidence: 0.9 });
+    const app = await testApp({ ai: canned(answer) });
+    const r = await app.inject({ method: "POST", url: "/api/receipts/scan", ...multipart("a.jpg", "image/jpeg", FAKE_JPEG) });
+    expect(r.statusCode).toBe(200);
+    expect(r.json().items).toMatchObject([{ name: "Tej", product: null, brand: null, packSize: null, packUnit: "l" }]);
+    await app.close();
+  });
+
   it("accepts fenced JSON, maps 'Ft' to HUF and drops unknown category ids", async () => {
     const answer = "```json\n" + JSON.stringify({ merchant: "Lidl", date: "2026-10-01", total: 990, currency: "Ft", items: [{ name: "Kenyér", unitPrice: 990, total: 990 }], suggestedCategoryId: "made-up", confidence: 0.5 }) + "\n```";
     const app = await testApp({ ai: canned(answer) });
@@ -76,13 +86,13 @@ describe("POST /api/ai/analyze", () => {
     const app = await testApp({ ai });
     const add = (amount: number, date: string, merchant: string, categoryId: string | null) =>
       app.deps.repo.createTransaction({ amount, currency: "HUF", date, merchant, categoryId, source: "manual" });
-    add(400000, "2026-09-01", "Munkabér", "income");
-    add(-60000, "2026-09-05", "Tesco", "groceries");
-    add(-150000, "2026-09-10", "Albérlet", "housing");
-    add(400000, "2026-10-01", "Munkabér", "income");
-    add(-90000, "2026-10-05", "Tesco", "groceries");
-    add(-150000, "2026-10-10", "Albérlet", "housing");
-    add(-12000, "2026-10-12", "Wolt", "restaurant");
+    await add(400000, "2026-09-01", "Munkabér", "income");
+    await add(-60000, "2026-09-05", "Tesco", "groceries");
+    await add(-150000, "2026-09-10", "Albérlet", "housing");
+    await add(400000, "2026-10-01", "Munkabér", "income");
+    await add(-90000, "2026-10-05", "Tesco", "groceries");
+    await add(-150000, "2026-10-10", "Albérlet", "housing");
+    await add(-12000, "2026-10-12", "Wolt", "restaurant");
     return app;
   }
 
@@ -126,7 +136,7 @@ describe("POST /api/ai/analyze", () => {
 });
 
 describe("provider adapters (fetch stubbed, no network)", () => {
-  it("selects mock by default when no key is set", () => {
+  it("selects mock by default when no key is set", async () => {
     const cfg = loadConfig({});
     expect(cfg.ai.provider).toBe("mock");
     expect(createAIProvider(cfg.ai).name).toBe("mock");

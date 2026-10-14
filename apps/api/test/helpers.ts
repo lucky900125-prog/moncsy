@@ -7,7 +7,7 @@ import { openDb } from "../src/db.js";
 export async function testApp(opts: BuildOptions = {}) {
   const base = loadConfig({});
   return buildApp({
-    db: opts.db ?? openDb(":memory:"),
+    db: opts.db ?? await openDb(":memory:"),
     ai: opts.ai ?? new MockProvider(),
     revolut: opts.revolut,
     config: { ...base, dbPath: ":memory:", ...opts.config },

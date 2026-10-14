@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
-import type { AppDeps } from "../app.js";
+import type { BackupStatus } from "@et/shared";
+import { isAuthorized, type AppDeps } from "../app.js";
 import {
   categoryCreateSchema,
   categoryPatchSchema,
@@ -12,13 +13,22 @@ import {
 
 type IdParams = { Params: { id: string } };
 
-export async function coreRoutes(app: FastifyInstance, { repo, ai, config }: AppDeps): Promise<void> {
-  app.get("/health", async () => ({
-    status: "ok",
-    time: new Date().toISOString(),
-    ai: { provider: ai.name, model: ai.model },
-    revolut: { mode: config.revolut.mode },
-  }));
+const NO_BACKUP: BackupStatus = { enabled: false, lastBackupAt: null, generation: null, lastError: null, pending: false, stopped: false };
+
+export async function coreRoutes(app: FastifyInstance, { repo, ai, config, backup }: AppDeps): Promise<void> {
+  // Open to everyone so clients can tell "server down" from "wrong token"; the setup details only with the token.
+  app.get("/health", async (req) => {
+    const base = { status: "ok", time: new Date().toISOString(), auth: config.apiToken ? "token" : "none" };
+    if (!isAuthorized(config, req)) return base;
+    return {
+      ...base,
+      ai: { provider: ai.name, model: ai.model },
+      revolut: { mode: config.revolut.mode },
+      backup: backup?.getStatus() ?? NO_BACKUP,
+    };
+  });
+
+  app.get("/backup/status", async (): Promise<BackupStatus> => backup?.getStatus() ?? NO_BACKUP);
 
   app.get("/categories", async () => repo.listCategories());
 
@@ -34,7 +44,7 @@ export async function coreRoutes(app: FastifyInstance, { repo, ai, config }: App
   });
 
   app.delete<IdParams>("/categories/:id", async (req, reply) => {
-    repo.deleteCategory(req.params.id);
+    await repo.deleteCategory(req.params.id);
     reply.status(204).send();
   });
 
@@ -55,7 +65,7 @@ export async function coreRoutes(app: FastifyInstance, { repo, ai, config }: App
   });
 
   app.delete<IdParams>("/transactions/:id", async (req, reply) => {
-    repo.deleteTransaction(req.params.id);
+    await repo.deleteTransaction(req.params.id);
     reply.status(204).send();
   });
 

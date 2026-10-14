@@ -1,8 +1,10 @@
 import { z } from "zod";
-import type { AnalyzeRequest, AnalyzeResponse, Category, Transaction } from "@et/shared";
+import type { AnalyzeRequest, AnalyzeResponse, Category, ProductFilter, Transaction } from "@et/shared";
+import { buildProductStats, rankStores, storeName, type ProductStat, type StoreRank } from "@et/shared/products";
 import type { AIProvider } from "../ai/index.js";
 import { parseModelJson } from "../ai/json.js";
 import { round2 } from "../repository.js";
+import { fold } from "../statements/values.js";
 
 export interface Aggregate {
   from: string;
@@ -125,6 +127,68 @@ export function aggregate(
   };
 }
 
+export interface ProductAggregate {
+  from: string;
+  to: string;
+  products: {
+    product: string;
+    brand: string | null;
+    pack: string | null;
+    /** what a price below is for: per kg, per l, per db, or per package/piece when the size is unknown */
+    priceUnit: "kg" | "l" | "db" | "package";
+    currency: string;
+    purchases: number;
+    spent: number;
+    stores: { store: string; avgPrice: number; purchases: number; lastDate: string }[];
+  }[];
+  storeRanking: StoreRank[];
+  /** products left out to keep the request small */
+  omitted: number;
+  /** what the user narrowed the products to, so the model answers about that and not the whole basket */
+  filter?: ProductFilter;
+}
+
+const MAX_PRODUCTS = 40;
+
+/** True when the product matches every part of the filter that is set. */
+export function matchesProductFilter(p: ProductStat, f: ProductFilter): boolean {
+  const has = (text: string | null | undefined, needle: string) => fold(text ?? "").includes(fold(needle));
+  if (f.q && !has(p.product, f.q) && !p.history.some((h) => has(h.name, f.q!))) return false;
+  if (f.brand && fold(p.brand ?? "") !== fold(f.brand)) return false;
+  if (f.merchant && !p.stores.some((s) => has(s.store, storeName(f.merchant!)))) return false;
+  return true;
+}
+
+/** Receipt line items grouped into products with their average price per store. Line-level history stays on the server. */
+export function productAggregate(txs: Transaction[], from: string, to: string, filter?: ProductFilter): ProductAggregate {
+  const active = filter && (filter.q || filter.brand || filter.merchant) ? filter : undefined;
+  const stats = buildProductStats(txs).filter((p) => !active || matchesProductFilter(p, active));
+  // Products bought in several stores are the comparable ones, so they go first; then the biggest spend.
+  const picked = [...stats.filter((p) => p.cheapest), ...stats.filter((p) => !p.cheapest)].slice(0, MAX_PRODUCTS);
+  return {
+    from,
+    to,
+    products: picked.map((p) => ({
+      product: p.product,
+      brand: p.brand,
+      pack: p.pack,
+      priceUnit: p.baseUnit ?? "package",
+      currency: p.currency,
+      purchases: p.purchases,
+      spent: p.spent,
+      stores: p.stores.map((s) => ({
+        store: s.store,
+        avgPrice: p.baseUnit ? (s.avgBasePrice ?? s.avgUnitPrice) : s.avgUnitPrice,
+        purchases: s.purchases,
+        lastDate: s.lastDate.slice(0, 10),
+      })),
+    })),
+    storeRanking: rankStores(stats),
+    omitted: Math.max(0, stats.length - picked.length),
+    ...(active ? { filter: active } : {}),
+  };
+}
+
 const analysisSchema = z.object({
   summary: z.string().min(1),
   insights: z
@@ -147,14 +211,28 @@ Return only this JSON object:
 {"summary": string (2-4 sentences), "insights": [{"title": string, "detail": string, "severity": "info" | "positive" | "warning"}]}
 Give 3 to 6 insights: notable categories, month-over-month changes, budget overruns, recurring merchants, and concrete savings ideas.`;
 
-export async function analyze(ai: AIProvider, req: AnalyzeRequest, agg: Aggregate): Promise<AnalyzeResponse> {
+const PRODUCTS_SYSTEM = `You are a careful shopping analyst for a household expense tracker.
+You receive the user's receipt line items grouped into products (generic product, brand, package size) with the average
+price paid in each store. avgPrice is per kg, per l or per db when priceUnit says so, otherwise per package or piece.
+storeRanking counts, over the products bought in more than one store, how often each store was the cheapest.
+When a "filter" is present, the user narrowed the products to it: answer about those products only.
+Write in Hungarian unless the user's question is clearly in another language.
+Compare prices only within one product entry (same product, same brand when a brand is given). A product bought in a single
+store has no comparison: say so instead of calling that store cheap. Use only numbers that appear in or follow from the data.
+Return only this JSON object:
+{"summary": string (2-4 sentences), "insights": [{"title": string, "detail": string, "severity": "info" | "positive" | "warning"}]}
+Give 3 to 8 insights: for which products and brands the store matters most and by how much, which store is cheapest overall
+for the basket the user actually buys, and where the data is too thin to tell.`;
+
+export async function analyze(ai: AIProvider, req: AnalyzeRequest, agg: Aggregate | ProductAggregate): Promise<AnalyzeResponse> {
+  const products = req.scope === "products";
   const user = [
-    req.question ? `Question: ${req.question}` : "Give a general analysis of this period.",
-    `<aggregate>${JSON.stringify(agg)}</aggregate>`,
+    req.question ? `Question: ${req.question}` : products ? "Where is it worth buying the products I buy?" : "Give a general analysis of this period.",
+    products ? `<products>${JSON.stringify(agg)}</products>` : `<aggregate>${JSON.stringify(agg)}</aggregate>`,
   ].join("\n\n");
   const raw = await ai.complete(
     [
-      { role: "system", content: SYSTEM },
+      { role: "system", content: products ? PRODUCTS_SYSTEM : SYSTEM },
       { role: "user", content: user },
     ],
     { json: true, maxTokens: 4000, temperature: 0.2 },

@@ -1,5 +1,5 @@
 import type { RevolutStatus } from "@et/shared";
-import { getMeta, setMeta, transaction as dbTransaction } from "../db.js";
+import { getMeta, setMeta } from "../db.js";
 import { HttpError } from "../errors.js";
 import type { Repository } from "../repository.js";
 import { categorize } from "./categorize.js";
@@ -90,7 +90,7 @@ export class BusinessApiRevolutProvider implements RevolutProvider {
   }
 
   async status(): Promise<RevolutStatus> {
-    const lastSyncAt = getMeta(this.repo.db, META_LAST_SYNC);
+    const lastSyncAt = await getMeta(this.repo.db, META_LAST_SYNC);
     if (!this.token) return { connected: false, mode: this.mode, lastSyncAt, accounts: [] };
     const accounts = await this.get<BizAccount[]>("/accounts");
     return {
@@ -104,10 +104,10 @@ export class BusinessApiRevolutProvider implements RevolutProvider {
   }
 
   async sync(): Promise<{ imported: number; skipped: number }> {
-    const last = getMeta(this.repo.db, META_LAST_SYNC);
+    const last = await getMeta(this.repo.db, META_LAST_SYNC);
     // The window starts at the earliest still-pending transaction from earlier syncs (so it is fetched again once
     // it completes) or a day before the last sync; dedupe on externalId handles the overlap.
-    const pendingSince = getMeta(this.repo.db, META_PENDING_SINCE);
+    const pendingSince = await getMeta(this.repo.db, META_PENDING_SINCE);
     const candidates = [
       last ? Date.parse(last) - 86_400_000 : Date.now() - 90 * 86_400_000,
       pendingSince ? Date.parse(pendingSince) : Infinity,
@@ -125,11 +125,11 @@ export class BusinessApiRevolutProvider implements RevolutProvider {
       if (nextTo === to) break;
       to = nextTo;
     }
-    const known = new Set(this.repo.listCategories().map((c) => c.id));
+    const known = new Set((await this.repo.listCategories()).map((c) => c.id));
     let imported = 0;
     let skipped = 0;
     let earliestPending: string | null = null;
-    dbTransaction(this.repo.db, () => {
+    await this.repo.withTx(async (repo) => {
       for (const tx of all) {
         if (tx.state === "pending" && tx.type !== "exchange" && (!earliestPending || tx.created_at < earliestPending)) {
           earliestPending = tx.created_at;
@@ -140,7 +140,7 @@ export class BusinessApiRevolutProvider implements RevolutProvider {
         }
         for (const leg of tx.legs ?? []) {
           const externalId = `revolut-biz:${tx.id}:${leg.leg_id}`;
-          if (this.repo.hasExternalId(externalId)) {
+          if (await repo.hasExternalId(externalId)) {
             skipped++;
             continue;
           }
@@ -149,7 +149,7 @@ export class BusinessApiRevolutProvider implements RevolutProvider {
           const amount = Math.round((leg.amount - (leg.fee ?? 0)) * 100) / 100;
           const merchant = tx.merchant?.name ?? leg.description ?? tx.reference ?? tx.type;
           const cat = categorize(`${merchant} ${leg.description ?? ""}`, amount, tx.type);
-          this.repo.createTransaction({
+          await repo.createTransaction({
             amount,
             currency: leg.currency,
             date: tx.completed_at ?? tx.created_at,
@@ -162,8 +162,8 @@ export class BusinessApiRevolutProvider implements RevolutProvider {
           imported++;
         }
       }
-      setMeta(this.repo.db, META_LAST_SYNC, new Date().toISOString());
-      setMeta(this.repo.db, META_PENDING_SINCE, earliestPending ?? "");
+      await setMeta(repo.db, META_LAST_SYNC, new Date().toISOString());
+      await setMeta(repo.db, META_PENDING_SINCE, earliestPending ?? "");
     });
     return { imported, skipped };
   }
