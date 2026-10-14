@@ -51,6 +51,20 @@ describe("statement values", () => {
     expect(() => parseStatementDate("31.31.2026", "dmy", TZ)).toThrow(/invalid date/);
   });
 
+  it("reads the Hungarian Excel date with a space after each dot", async () => {
+    expect(detectDateOrder(["2026. 10. 14."])).toBe("ymd");
+    expect(parseStatementDate("2026. 10. 14.", "dmy", TZ)).toBe("2026-10-14T10:00:00.000Z");
+    expect(parseStatementDate("2026. 10. 14. 8:15", "dmy", TZ)).toBe("2026-10-14T06:15:00.000Z");
+    expect(parseStatementDate("14. 10. 2026", "dmy", TZ)).toBe("2026-10-14T10:00:00.000Z");
+    // What a hu-HU Excel writes when the sheet is saved as CSV.
+    const r = await parse("kivonat.csv", "Dátum;Összeg;Partner\n2026. 10. 14.;-4 785;Spar\n2026. 10. 15. 8:15;685 000;Példa Kft.\n");
+    expect(r.errors).toEqual([]);
+    expect(r.transactions.map((t) => [t.date, t.amount])).toEqual([
+      ["2026-10-14T10:00:00.000Z", -4785],
+      ["2026-10-15T06:15:00.000Z", 685000],
+    ]);
+  });
+
   it("decodes Windows-1250 exports and finds the delimiter", () => {
     const cp1250 = Buffer.from([0x4b, 0xf6, 0x7a, 0x6c, 0x65, 0x6d, 0xe9, 0x6e, 0x79]); // "Közlemény"
     expect(decodeText(cp1250)).toBe("Közlemény");
