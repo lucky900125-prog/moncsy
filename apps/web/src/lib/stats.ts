@@ -47,6 +47,18 @@ export function byCategory(tx: Transaction[], cats: Map<string, Category>) {
     .sort((a, b) => b.value - a.value);
 }
 
+/** Spending and income per category, both positive; a refund in an expense category counts as its income. */
+export function flowsByCategory(tx: Transaction[]) {
+  const m = new Map<string | null, { expense: number; income: number }>();
+  for (const t of tx) {
+    const v = m.get(t.categoryId) ?? { expense: 0, income: 0 };
+    if (t.amount < 0) v.expense -= t.amount;
+    else v.income += t.amount;
+    m.set(t.categoryId, v);
+  }
+  return m;
+}
+
 /** Cumulative daily spend for a month; `upToToday` stops the line at today for the current month. */
 export function cumulative(tx: Transaction[], month: Date, upToToday: boolean) {
   const days = getDaysInMonth(month);
