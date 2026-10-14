@@ -1,10 +1,8 @@
-import { createRequire } from "node:module";
 import { Worker } from "node:worker_threads";
 import ExcelJS from "exceljs";
 import { HttpError, badRequest } from "../errors.js";
 import type { ExportPayload, ImportPayload, RawRecord } from "./common.js";
 import type { SheetCell, SheetRows, WorkerInput, WorkerOutput } from "./xlsx-worker.js";
-import { UnpackedTooLargeError, assertUnpackedSize } from "./zip.js";
 
 export type { SheetCell, SheetRows };
 
@@ -27,9 +25,16 @@ const WORKER_URL = new URL(import.meta.url.endsWith(".ts") ? "./xlsx-worker.ts" 
 /** One workbook is read at a time, so two uploads cannot take twice the memory. */
 let queue: Promise<unknown> = Promise.resolve();
 
-function inWorker(data: Buffer, timeoutMs: number): Promise<WorkerOutput> {
+function inWorker(data: Buffer, failure: string, timeoutMs: number): Promise<WorkerOutput> {
   return new Promise((resolve, reject) => {
-    const input: WorkerInput = { data: new Uint8Array(data), maxRows: MAX_XLSX_ROWS, maxColumns: MAX_XLSX_COLUMNS, heapMb: XLSX_WORKER_HEAP_MB };
+    const input: WorkerInput = {
+      data: new Uint8Array(data),
+      maxUnpackedBytes: MAX_XLSX_UNPACKED_BYTES,
+      maxRows: MAX_XLSX_ROWS,
+      maxColumns: MAX_XLSX_COLUMNS,
+      heapMb: XLSX_WORKER_HEAP_MB,
+      failure,
+    };
     const worker = new Worker(WORKER_URL, {
       workerData: input,
       resourceLimits: { maxOldGenerationSizeMb: XLSX_WORKER_HEAP_MB, maxYoungGenerationSizeMb: 16 },
@@ -61,159 +66,17 @@ function inWorker(data: Buffer, timeoutMs: number): Promise<WorkerOutput> {
 }
 
 /**
- * ExcelJS builds an object for every cell of a merge, a data validation and a defined name, and a column object for
- * every column of a <col> range. A small file can name the whole sheet (17 billion cells) in any of them, so they are
- * counted before it is loaded. Legitimate files merge a few header cells and validate a table's column; a sheet has
- * 16384 columns. Each limit alone fits in the reader's heap beside a few thousand rows: validation or a name over a
- * whole column (1 048 576 cells) does not, so such a file is refused here, with a message, rather than after a while.
- */
-const MAX_MERGED_CELLS = 100_000;
-const MAX_VALIDATED_CELLS = 200_000;
-const MAX_NAMED_CELLS = 200_000;
-const MAX_COLUMN = 16_384;
-
-// ExcelJS's own address parser, so a range is sized as ExcelJS will expand it: it skips stray characters, for one.
-const colCache = createRequire(import.meta.url)("exceljs/lib/utils/col-cache.js") as {
-  decodeEx(ref: string): { top?: number; left?: number; bottom?: number; right?: number };
-};
-
-/** Cells ExcelJS makes of one reference ("A1:B2", "$A$1:$B$2", "Sheet1!A1:B2", "C3"). */
-function cellsOf(ref: string): number {
-  try {
-    const r = colCache.decodeEx(ref);
-    if (r.top === undefined) return 1;
-    const cells = (r.bottom! - r.top + 1) * (r.right! - r.left! + 1);
-    return Number.isFinite(cells) ? cells : 0;
-  } catch {
-    // ExcelJS cannot read it either: a merge or validation written so fails the load, and such a defined name is skipped.
-    return 0;
-  }
-}
-
-const NAMED_ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
-const ENTITY = /&(?:#(\d+)|#x([\da-fA-F]+)|(amp|lt|gt|quot|apos));/y;
-
-/**
- * XML's five named entities and its numeric character references, decoded as an XML parser reads them. A loop over the
- * ampersands rather than a replace with a callback: a value of millions of references is decoded in about half the time.
- */
-function decodeXml(text: string): string {
-  let amp = text.indexOf("&");
-  if (amp < 0) return text;
-  const parts: string[] = [];
-  let from = 0;
-  for (; amp >= 0; amp = text.indexOf("&", amp + 1)) {
-    ENTITY.lastIndex = amp;
-    const m = ENTITY.exec(text);
-    if (!m) continue;
-    const code = m[3] ? 0 : m[1] !== undefined ? Number(m[1]) : parseInt(m[2]!, 16);
-    if (code > 0x10ffff) continue;
-    parts.push(text.slice(from, amp), m[3] ? NAMED_ENTITIES[m[3]]! : String.fromCodePoint(code));
-    from = ENTITY.lastIndex;
-    amp = from - 1;
-  }
-  parts.push(text.slice(from));
-  return parts.join("");
-}
-
-/**
- * Where the tag whose attributes start at `from` closes: the next > outside quotes. XML allows a > inside a quoted value
- * but no <, so a < first means a broken tag (-1). A loop rather than a regex: no backtracking, however long the tag.
- */
-function tagEnd(xml: string, from: number): number {
-  let quote = "";
-  for (let i = from; i < xml.length; i++) {
-    const c = xml[i]!;
-    if (c === "<") return -1;
-    if (quote) {
-      if (c === quote) quote = "";
-    } else if (c === '"' || c === "'") quote = c;
-    else if (c === ">") return i;
-  }
-  return -1;
-}
-
-/** The attribute text of every opening <tag ...> in the XML (any namespace prefix), and where each tag ends. */
-function* tags(xml: string, tag: string): Generator<{ attributes: string; end: number }> {
-  const open = new RegExp(`<(?:\\w+:)?${tag}\\b`, "g");
-  for (let m = open.exec(xml); m; m = open.exec(xml)) {
-    const end = tagEnd(xml, open.lastIndex);
-    if (end < 0) continue;
-    yield { attributes: xml.slice(open.lastIndex, end), end };
-    open.lastIndex = end + 1;
-  }
-}
-
-/** The decoded values of an attribute on every <tag ...> in the XML, read pair by pair as a parser does. */
-function* attributes(xml: string, tag: string, attribute: string): Generator<string> {
-  for (const t of tags(xml, tag)) {
-    for (const a of t.attributes.matchAll(/([^\s=]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) {
-      if (a[1] === attribute || a[1]!.endsWith(`:${attribute}`)) yield decodeXml(a[2] ?? a[3]!);
-    }
-  }
-}
-
-/** The text of every <tag>...</tag> in the XML, child tags left out, as ExcelJS joins the text it is given. */
-function* texts(xml: string, tag: string): Generator<string> {
-  const close = new RegExp(`</(?:\\w+:)?${tag}\\s*>`, "g");
-  let after = 0;
-  for (const t of tags(xml, tag)) {
-    if (t.end < after || t.attributes.endsWith("/")) continue;
-    close.lastIndex = t.end + 1;
-    const c = close.exec(xml);
-    if (!c) return;
-    yield xml.slice(t.end + 1, c.index).replace(/<[^<>]*>/g, "");
-    after = close.lastIndex;
-  }
-}
-
-function checkRanges(_name: string, content: Buffer): void {
-  // Every part, whatever its name: ExcelJS drops a leading "/" and matches sheet names anywhere in the path, and JSZip can
-  // take a name from an extra field, so the name says nothing reliable. Comments, CDATA and processing instructions go
-  // first, as ExcelJS's parser passes over them: text around a comment is joined, and CDATA is not read at all. One left
-  // open runs to the end, so a file of many unclosed ones is still read once, not once per opening.
-  const xml = content.toString("utf8").replace(/<!--[\s\S]*?(?:-->|$)|<!\[CDATA\[[\s\S]*?(?:\]\]>|$)|<\?[\s\S]*?(?:\?>|$)/g, "");
-  let merged = 0;
-  for (const ref of attributes(xml, "mergeCell", "ref")) merged += cellsOf(ref);
-  if (merged > MAX_MERGED_CELLS) {
-    throw new HttpError(413, `The XLSX file merges ${merged} cells; more than ${MAX_MERGED_CELLS} are not read. Unmerge them or save the sheet as CSV`);
-  }
-  let validated = 0;
-  for (const sqref of attributes(xml, "dataValidation", "sqref")) for (const ref of sqref.split(/\s+/)) if (ref) validated += ref.includes(":") ? cellsOf(ref) : 1;
-  if (validated > MAX_VALIDATED_CELLS) {
-    throw new HttpError(413, `The XLSX file has data validation on ${validated} cells; more than ${MAX_VALIDATED_CELLS} are not read. Remove it or save the sheet as CSV`);
-  }
-  // ExcelJS makes a column object for every column up to the largest min and max, read with parseInt as here.
-  for (const bound of [...attributes(xml, "col", "min"), ...attributes(xml, "col", "max")]) {
-    const n = parseInt(bound, 10);
-    if (n > MAX_COLUMN) throw badRequest(`The XLSX file describes column ${n}; a sheet has ${MAX_COLUMN} columns`);
-  }
-  let named = 0;
-  for (const text of texts(xml, "definedName")) for (const ref of decodeXml(text).split(",")) named += cellsOf(ref);
-  if (named > MAX_NAMED_CELLS) {
-    throw new HttpError(413, `The XLSX file's defined names cover ${named} cells; more than ${MAX_NAMED_CELLS} are not read. Delete the names or save the sheet as CSV`);
-  }
-}
-
-/**
- * Reads every sheet of an uploaded workbook into plain rows. The ZIP is checked first: what it unpacks to, and the
- * ranges ExcelJS would expand (checkRanges). ExcelJS then runs in a worker thread with its own heap and time limit,
- * for whatever else a small file can make it build. `failure` starts the 400 message for a file that is not a workbook.
+ * Reads every sheet of an uploaded workbook into plain rows, in a worker thread with its own heap and time limit
+ * (io/xlsx-worker.ts). The ZIP is checked there first, before ExcelJS loads it: what it unpacks to, and the ranges
+ * ExcelJS would expand (io/xlsx-ranges.ts). So this thread never unpacks or scans an upload, and checking a large one
+ * runs out of the reader's time, not the server's. `failure` starts the 400 message for a file that is not a workbook.
  */
 export async function readWorkbook(buf: Buffer, failure: string, timeoutMs = XLSX_WORKER_TIMEOUT_MS): Promise<SheetRows[]> {
-  try {
-    assertUnpackedSize(buf, MAX_XLSX_UNPACKED_BYTES, checkRanges);
-  } catch (e) {
-    if (e instanceof HttpError) throw e;
-    if (e instanceof UnpackedTooLargeError) throw new HttpError(413, `The XLSX file ${e.message}; split it into smaller files`);
-    throw badRequest(`${failure}: ${(e as Error).message}`);
-  }
-  const run = queue.then(() => inWorker(buf, timeoutMs));
+  const run = queue.then(() => inWorker(buf, failure, timeoutMs));
   queue = run.catch(() => undefined);
   const out = await run;
   if (out.ok) return out.sheets;
-  if (out.status === 503) throw new HttpError(503, out.message);
-  throw badRequest(out.message.startsWith("The sheet") ? out.message : `${failure}: ${out.message}`);
+  throw new HttpError(out.status, out.message);
 }
 
 /** The sheet with the most rows that have a value; banks sometimes add a cover sheet. */

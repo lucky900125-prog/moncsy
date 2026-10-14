@@ -1,8 +1,8 @@
 // Reads an uploaded workbook in a worker thread that has its own memory limit (io/xlsx.ts#readWorkbook).
 // ExcelJS builds the whole workbook in memory, and a few bytes of XML (a merge, a column range, a validation or a
 // defined name over the whole sheet) make it build millions of objects. Out of memory, only this thread dies.
-// Node runs this file as it is: from dist/ as JavaScript, in development and tests by stripping the types, so it
-// imports nothing from the rest of the API.
+// Node runs this file as it is: from dist/ as JavaScript, in development and tests by stripping the types. So it imports
+// from the rest of the API only modules that import nothing from it themselves, by the file extension it runs with.
 import { getHeapStatistics } from "node:v8";
 import { parentPort, workerData } from "node:worker_threads";
 import ExcelJS from "exceljs";
@@ -17,13 +17,18 @@ export interface SheetRows {
 
 export interface WorkerInput {
   data: Uint8Array;
+  maxUnpackedBytes: number;
   maxRows: number;
   maxColumns: number;
   /** the heap this thread was started with, in MB */
   heapMb: number;
+  /** starts the message for a file that is not a workbook */
+  failure: string;
 }
 
-export type WorkerOutput = { ok: true; sheets: SheetRows[] } | { ok: false; status: 400 | 503; message: string };
+export type WorkerOutput = { ok: true; sheets: SheetRows[] } | { ok: false; status: 400 | 413 | 503; message: string };
+
+const sibling = (name: string) => new URL(import.meta.url.endsWith(".ts") ? `./${name}.ts` : `./${name}.js`, import.meta.url).href;
 
 /** The value a cell shows: a formula's result, rich text's text, a hyperlink's text; an error is empty. */
 function plain(v: ExcelJS.CellValue): SheetCell {
@@ -35,7 +40,7 @@ function plain(v: ExcelJS.CellValue): SheetCell {
   return null;
 }
 
-async function read({ data, maxRows, maxColumns, heapMb }: WorkerInput): Promise<WorkerOutput> {
+async function read({ data, maxUnpackedBytes, maxRows, maxColumns, heapMb, failure }: WorkerInput): Promise<WorkerOutput> {
   // --max-old-space-size (for example in NODE_OPTIONS) is process-wide and overrides a worker's own limit,
   // which would leave the server as exposed as reading the workbook on the main thread.
   const limitMb = getHeapStatistics().heap_size_limit / 1024 / 1024;
@@ -46,11 +51,22 @@ async function read({ data, maxRows, maxColumns, heapMb }: WorkerInput): Promise
       message: `XLSX files are not read: the reader's memory limit of ${heapMb} MB is overridden (${Math.round(limitMb)} MB), usually by --max-old-space-size in NODE_OPTIONS`,
     };
   }
+  // What the archive unpacks to and the ranges ExcelJS would expand are counted before it loads anything, here rather
+  // than on the server's thread: a large upload then costs this thread's time and heap, inside its limits.
+  const { UnpackedTooLargeError, assertUnpackedSize } = (await import(sibling("zip"))) as typeof import("./zip.js");
+  const { XlsxLimitError, checkRanges } = (await import(sibling("xlsx-ranges"))) as typeof import("./xlsx-ranges.js");
+  try {
+    assertUnpackedSize(Buffer.from(data.buffer, data.byteOffset, data.byteLength), maxUnpackedBytes, checkRanges);
+  } catch (e) {
+    if (e instanceof XlsxLimitError) return { ok: false, status: e.status, message: e.message };
+    if (e instanceof UnpackedTooLargeError) return { ok: false, status: 413, message: `The XLSX file ${e.message}; split it into smaller files` };
+    return { ok: false, status: 400, message: `${failure}: ${(e as Error).message}` };
+  }
   const wb = new ExcelJS.Workbook();
   try {
     await wb.xlsx.load(data as unknown as ArrayBuffer);
   } catch (e) {
-    return { ok: false, status: 400, message: (e as Error).message };
+    return { ok: false, status: 400, message: `${failure}: ${(e as Error).message}` };
   }
   const sheets: SheetRows[] = [];
   for (const ws of wb.worksheets) {
