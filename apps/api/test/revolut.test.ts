@@ -171,6 +171,30 @@ describe("Revolut providers", () => {
     expect(txCalls[1]!.searchParams.get("from")).toBe("2026-10-12T10:00:00.000Z");
   });
 
+  it("business-api mode pages with `to` and counts a re-fetched boundary item once", async () => {
+    const repo = new Repository(await openDb(":memory:"));
+    const mk = (n: number) => ({
+      id: `tx-${n}`,
+      type: "card_payment",
+      state: "completed",
+      created_at: new Date(Date.UTC(2026, 9, 1, 0, 0, n)).toISOString(),
+      legs: [{ leg_id: `l-${n}`, account_id: "acc-1", amount: -1, fee: 0, currency: "EUR" }],
+    });
+    const first = Array.from({ length: 1000 }, (_, n) => mk(n));
+    const calls: URL[] = [];
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      calls.push(url);
+      // Page 2 starts with the boundary item (created_at == `to`) again, as an inclusive `to` would return it.
+      return Response.json(calls.length === 1 ? first : [first[999], mk(1000)]);
+    });
+    const p = new BusinessApiRevolutProvider(repo, "tok", "sandbox", fetchImpl as unknown as typeof fetch);
+    expect(await p.sync()).toEqual({ imported: 1001, skipped: 0 });
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.searchParams.get("to")).toBe(first[999]!.created_at);
+    expect(await repo.listTransactions()).toHaveLength(1001);
+  });
+
   it("business-api mode without a token reports disconnected", async () => {
     const p = new BusinessApiRevolutProvider(new Repository(await openDb(":memory:")), undefined, "production");
     expect((await p.status()).connected).toBe(false);
