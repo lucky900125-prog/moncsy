@@ -190,13 +190,14 @@ export function productAggregate(txs: Transaction[], from: string, to: string, f
   };
 }
 
+// Several times what the prompt asks for (2-4 sentences, a few insights); only a runaway answer is refused.
 const analysisSchema = z.object({
-  summary: z.string().min(1),
+  summary: z.string().min(1).max(4000),
   insights: z
     .array(
       z.object({
-        title: z.string().min(1),
-        detail: z.string().min(1),
+        title: z.string().min(1).max(200),
+        detail: z.string().min(1).max(2000),
         severity: z.enum(["info", "positive", "warning"]),
       }),
     )
