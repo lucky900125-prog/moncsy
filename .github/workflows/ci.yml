@@ -1,16 +1,28 @@
+# Checks every push and pull request. On main, the web PWA is then published to GitHub Pages, and only once the checks
+# have passed (architect's CI-01). There is no API on Pages, so the app runs in its built-in demo mode (sample data kept
+# in the browser). One-time setup in the repo: Settings -> Pages -> Build and deployment -> Source: "GitHub Actions".
 name: ci
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+# Every job may read the repository and nothing else, unless it asks for more itself (architect's CI-05).
+permissions:
+  contents: read
 
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
+      # No job pushes, so the token is not left in the checkout's git config for later steps to find.
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+        with:
+          persist-credentials: false
+      # The commit the v4 tag pointed to when this was pinned: a tag can be moved to other code, a commit cannot.
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
       - uses: actions/setup-node@v4
         with:
           node-version-file: .node-version
@@ -41,3 +53,47 @@ jobs:
         run: pnpm --filter @et/web build
       - name: Mobile typecheck
         run: pnpm --filter @et/mobile typecheck
+
+  pages-build:
+    needs: check
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build web for /<repo>/
+        run: pnpm --filter @et/web build
+        env:
+          BASE_PATH: /${{ github.event.repository.name }}/
+          # <account>.github.io is shared by all Pages sites of the account, so no caching service worker here
+          # (see apps/web/vite.config.ts). Set "on" once the app has an origin of its own.
+          PWA_SERVICE_WORKER: "off"
+      # GitHub Pages serves 404.html for unknown paths, which lets deep links like /moncsy/tetelek load the SPA.
+      - run: cp apps/web/dist/index.html apps/web/dist/404.html
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/web/dist
+
+  pages-deploy:
+    needs: pages-build
+    runs-on: ubuntu-latest
+    # The only job that writes anything: what actions/deploy-pages asks for, and nothing more.
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
