@@ -24,6 +24,7 @@ export default function App() {
           <Route path="tetelek" element={<TransactionsPage />} />
           <Route path="blokk" element={<ScanPage />} />
           <Route path="elemzes" element={<InsightsPage />} />
+          <Route path="elemzes/reszletek" element={<InsightsPage tab="details" />} />
           <Route path="kategoriak" element={<CategoriesPage />} />
           <Route path="beallitasok" element={<SettingsPage />} />
         </Route>

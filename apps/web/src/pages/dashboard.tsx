@@ -59,7 +59,12 @@ export function DashboardPage() {
   }, [transactions, month, cats]);
 
   if (status === "error") {
-    return <Card className="p-6 text-sm text-destructive">Nem sikerült betölteni az adatokat: {error}</Card>;
+    return (
+      <Card className="flex flex-col items-start gap-3 p-6 text-sm">
+        <p className="text-destructive">Nem sikerült betölteni az adatokat: {error}</p>
+        <Button asChild variant="outline" size="sm"><Link to="/beallitasok">Kapcsolat beállítása</Link></Button>
+      </Card>
+    );
   }
   if (status === "loading") {
     return <div className="grid gap-4 sm:grid-cols-3">{[0, 1, 2].map((i) => <div key={i} className="h-28 animate-pulse rounded-xl bg-muted" />)}</div>;
