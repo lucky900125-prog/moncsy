@@ -18,6 +18,28 @@ export interface Category {
 
 export type PackUnit = "g" | "kg" | "ml" | "l" | "db";
 
+/**
+ * Built-in categories. The API seeds them (idempotently, so a new entry here reaches existing
+ * databases on the next start) and the web demo mode starts from them. Ids are stable English
+ * slugs; name, icon and color are defaults the user may edit.
+ */
+export const DEFAULT_CATEGORIES = [
+  { id: "groceries", name: "Élelmiszer", icon: "shopping-cart", color: "#7c9a7e" },
+  { id: "restaurant", name: "Étterem", icon: "utensils-crossed", color: "#c4956c" },
+  { id: "transport", name: "Közlekedés", icon: "bus", color: "#8aa6b8" },
+  { id: "housing", name: "Lakhatás", icon: "home", color: "#9d8fb5" },
+  { id: "utilities", name: "Rezsi", icon: "zap", color: "#c9a66b" },
+  { id: "entertainment", name: "Szórakozás", icon: "film", color: "#b5899f" },
+  { id: "health", name: "Egészség", icon: "heart-pulse", color: "#b88a8a" },
+  { id: "clothing", name: "Ruházat", icon: "shirt", color: "#7fa8a3" },
+  { id: "travel", name: "Utazás", icon: "plane", color: "#8f9bb3" },
+  { id: "subscriptions", name: "Előfizetések", icon: "repeat", color: "#a3a86b" },
+  { id: "other", name: "Egyéb", icon: "package", color: "#94a3a8" },
+  { id: "income", name: "Bevétel", icon: "wallet", color: "#6f8f73" },
+] as const satisfies readonly Pick<Category, "id" | "name" | "icon" | "color">[];
+
+export type DefaultCategoryId = (typeof DEFAULT_CATEGORIES)[number]["id"];
+
 export interface ReceiptItem {
   /** the line as printed on the receipt */
   name: string;

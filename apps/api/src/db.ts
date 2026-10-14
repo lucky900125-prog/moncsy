@@ -1,6 +1,7 @@
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { DEFAULT_CATEGORIES } from "@et/shared";
 
 export type SqlArgs = SQLInputValue[];
 
@@ -155,25 +156,8 @@ async function migrate(db: DB): Promise<void> {
   `);
 }
 
-export const DEFAULT_CATEGORIES = [
-  { id: "groceries", name: "Élelmiszer", icon: "shopping-cart", color: "#7c9a7e" },
-  { id: "restaurant", name: "Étterem", icon: "utensils", color: "#c08b6a" },
-  { id: "transport", name: "Közlekedés", icon: "bus", color: "#6f8fa8" },
-  { id: "housing", name: "Lakhatás", icon: "home", color: "#9a8577" },
-  { id: "utilities", name: "Rezsi", icon: "zap", color: "#c2a65f" },
-  { id: "entertainment", name: "Szórakozás", icon: "film", color: "#a07fa3" },
-  { id: "health", name: "Egészség", icon: "heart-pulse", color: "#c47f86" },
-  { id: "clothing", name: "Ruházat", icon: "shirt", color: "#8c8fb3" },
-  { id: "travel", name: "Utazás", icon: "plane", color: "#5f9c9a" },
-  { id: "subscriptions", name: "Előfizetések", icon: "repeat", color: "#8a9bb0" },
-  { id: "other", name: "Egyéb", icon: "circle-ellipsis", color: "#9e9e94" },
-  { id: "income", name: "Bevétel", icon: "wallet", color: "#6e9f72" },
-] as const;
-
-export type DefaultCategoryId = (typeof DEFAULT_CATEGORIES)[number]["id"];
-
+/** Idempotent: inserts any default category that is missing; rows the user has edited are left alone. */
 async function seedCategories(db: DB): Promise<void> {
-  if (await db.get("SELECT value FROM meta WHERE key = 'seeded'")) return;
   await db.tx(async (t) => {
     for (const [i, c] of DEFAULT_CATEGORIES.entries()) {
       await t.run(
@@ -181,7 +165,6 @@ async function seedCategories(db: DB): Promise<void> {
         [c.id, c.name, c.icon, c.color, i],
       );
     }
-    await t.run("INSERT OR IGNORE INTO meta (key, value) VALUES ('seeded', ?)", [new Date().toISOString()]);
   });
 }
 

@@ -1,4 +1,4 @@
-import type { DefaultCategoryId } from "../db.js";
+import type { DefaultCategoryId } from "@et/shared";
 
 /**
  * Simple keyword rules mapping a merchant / description to one of the seeded category ids.

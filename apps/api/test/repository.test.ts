@@ -1,5 +1,9 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, beforeEach } from "vitest";
-import { openDb, DEFAULT_CATEGORIES } from "../src/db.js";
+import { DEFAULT_CATEGORIES } from "@et/shared";
+import { openDb } from "../src/db.js";
 import { Repository } from "../src/repository.js";
 import { testApp } from "./helpers.js";
 
@@ -14,6 +18,18 @@ describe("seeding", () => {
     expect(cats.map((c) => c.name)).toEqual(DEFAULT_CATEGORIES.map((c) => c.name));
     expect(cats.every((c) => !c.isCustom && /^#[0-9a-f]{6}$/.test(c.color))).toBe(true);
     expect(cats.find((c) => c.id === "groceries")?.name).toBe("Élelmiszer");
+  });
+
+  it("re-seeds only what is missing on later opens and keeps user edits", async () => {
+    const path = join(mkdtempSync(join(tmpdir(), "moncsy-")), "t.db");
+    const first = await openDb(path);
+    await first.run("DELETE FROM categories WHERE id = 'travel'");
+    await first.run("UPDATE categories SET name = 'Kaja' WHERE id = 'groceries'");
+    first.close();
+    const again = new Repository(await openDb(path));
+    expect((await again.getCategory("travel"))?.name).toBe("Utazás");
+    expect((await again.getCategory("groceries"))?.name).toBe("Kaja");
+    expect(await again.listCategories()).toHaveLength(DEFAULT_CATEGORIES.length);
   });
 });
 

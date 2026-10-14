@@ -1,4 +1,4 @@
-import type { AnalyzeResponse, Category, PackUnit, ProductFilter, ReceiptItem, Transaction } from "@et/shared";
+import { DEFAULT_CATEGORIES, type AnalyzeResponse, type Category, type DefaultCategoryId, type PackUnit, type ProductFilter, type ReceiptItem, type Transaction } from "@et/shared";
 import { buildProductStats, rankStores } from "@et/shared/products";
 import type { Backend, TxQuery } from "./backend";
 import { demoParseStatement } from "./demo-statement";
@@ -9,20 +9,17 @@ import { uid } from "./utils";
 // v2: grocery receipts carry line items for the Részletek tab; older demo data is replaced once.
 const KEY = "moncsy-demo-v2";
 
-export const DEFAULT_CATEGORIES: Category[] = [
-  { id: "groceries", name: "Élelmiszer", icon: "shopping-cart", color: "#7c9a7e", isCustom: false, budget: 120000 },
-  { id: "restaurant", name: "Étterem", icon: "utensils-crossed", color: "#c4956c", isCustom: false, budget: 40000 },
-  { id: "transport", name: "Közlekedés", icon: "bus", color: "#8aa6b8", isCustom: false, budget: 25000 },
-  { id: "housing", name: "Lakhatás", icon: "home", color: "#9d8fb5", isCustom: false },
-  { id: "utilities", name: "Rezsi", icon: "zap", color: "#c9a66b", isCustom: false, budget: 35000 },
-  { id: "entertainment", name: "Szórakozás", icon: "film", color: "#b5899f", isCustom: false, budget: 20000 },
-  { id: "health", name: "Egészség", icon: "heart-pulse", color: "#b88a8a", isCustom: false },
-  { id: "clothing", name: "Ruházat", icon: "shirt", color: "#7fa8a3", isCustom: false },
-  { id: "travel", name: "Utazás", icon: "plane", color: "#8f9bb3", isCustom: false },
-  { id: "subscriptions", name: "Előfizetések", icon: "repeat", color: "#a3a86b", isCustom: false, budget: 12000 },
-  { id: "other", name: "Egyéb", icon: "package", color: "#94a3a8", isCustom: false },
-  { id: "income", name: "Bevétel", icon: "wallet", color: "#6f8f73", isCustom: false },
-];
+/** Demo budgets on top of the shared defaults, so the dashboard's "Keretek" card has something to show. */
+const DEMO_BUDGETS: Partial<Record<DefaultCategoryId, number>> = {
+  groceries: 120000,
+  restaurant: 40000,
+  transport: 25000,
+  utilities: 35000,
+  entertainment: 20000,
+  subscriptions: 12000,
+};
+
+const DEMO_CATEGORIES: Category[] = DEFAULT_CATEGORIES.map((c) => ({ ...c, isCustom: false, budget: DEMO_BUDGETS[c.id] ?? null }));
 
 type Db = { categories: Category[]; transactions: Transaction[] };
 
@@ -114,7 +111,7 @@ function seed(): Db {
     }
   }
   tx.sort((a, b) => b.date.localeCompare(a.date));
-  return { categories: DEFAULT_CATEGORIES, transactions: tx };
+  return { categories: DEMO_CATEGORIES, transactions: tx };
 }
 
 function load(): Db {
