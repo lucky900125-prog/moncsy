@@ -12,12 +12,17 @@ import {
 
 type IdParams = { Params: { id: string } };
 
-export async function coreRoutes(app: FastifyInstance, { repo, ai, config }: AppDeps): Promise<void> {
+export async function coreRoutes(app: FastifyInstance, { repo, ai, config, backup }: AppDeps): Promise<void> {
   // Open to everyone so clients can tell "server down" from "wrong token"; the setup details only with the token.
   app.get("/health", async (req) => {
     const base = { status: "ok", time: new Date().toISOString(), auth: config.apiToken ? "token" : "none" };
     if (!isAuthorized(config, req)) return base;
-    return { ...base, ai: { provider: ai.name, model: ai.model }, revolut: { mode: config.revolut.mode } };
+    return {
+      ...base,
+      ai: { provider: ai.name, model: ai.model },
+      revolut: { mode: config.revolut.mode },
+      backup: backup?.getStatus() ?? { enabled: false },
+    };
   });
 
   app.get("/categories", async () => repo.listCategories());

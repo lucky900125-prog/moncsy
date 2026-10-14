@@ -3,6 +3,7 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import { createAIProvider, type AIProvider } from "./ai/index.js";
+import { BackupScheduler, type BackupConfig } from "./backup.js";
 import { loadConfig, type AppConfig } from "./config.js";
 import { openDb, type DB } from "./db.js";
 import { HttpError } from "./errors.js";
@@ -22,6 +23,8 @@ export interface AppDeps {
   repo: Repository;
   ai: AIProvider;
   revolut: RevolutProvider;
+  /** null when no off-site backup is configured */
+  backup: BackupScheduler | null;
 }
 
 export interface BuildOptions {
@@ -29,8 +32,13 @@ export interface BuildOptions {
   db?: DB;
   ai?: AIProvider;
   revolut?: RevolutProvider;
+  backup?: BackupConfig | null;
   logger?: boolean;
 }
+
+/** After this many wrong tokens from one address in AUTH_WINDOW_MS, that address gets 429 until the window ends. */
+const AUTH_MAX_FAILURES = 20;
+const AUTH_WINDOW_MS = 10 * 60 * 1000;
 
 export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance & { deps: AppDeps }> {
   const base = loadConfig();
@@ -43,9 +51,14 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
     repo,
     ai: opts.ai ?? createAIProvider(config.ai),
     revolut: opts.revolut ?? createRevolutProvider(config.revolut, repo),
+    backup: null,
   };
 
-  const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 2 * 1024 * 1024 });
+  // Behind a reverse proxy (Render) the client address is in X-Forwarded-For; TRUST_PROXY_HOPS says how many proxies to trust.
+  const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 2 * 1024 * 1024, trustProxy: (_addr: string, hop: number) => hop < config.trustProxyHops });
+  if (opts.backup) {
+    deps.backup = new BackupScheduler(db, opts.backup, { info: (m) => app.log.info(m), error: (m) => app.log.error(m) });
+  }
   await app.register(cors, { origin: config.corsOrigin === "*" ? true : config.corsOrigin.split(",").map((s) => s.trim()) });
   await app.register(multipart, { limits: { fileSize: MAX_UPLOAD_BYTES, files: 1, fields: 10 } });
 
@@ -64,11 +77,29 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
   await app.register(
     async (api) => {
       if (config.apiToken) {
+        const failures = new Map<string, { count: number; resetAt: number }>();
         api.addHook("onRequest", async (req, reply) => {
           if (req.method === "OPTIONS" || req.routeOptions.url === "/api/health") return;
+          const now = Date.now();
+          let f = failures.get(req.ip);
+          if (f && f.resetAt <= now) {
+            failures.delete(req.ip);
+            f = undefined;
+          }
+          if (f && f.count >= AUTH_MAX_FAILURES) {
+            return reply.status(429).send({ error: "Too many wrong API tokens from this address; try again later" });
+          }
           if (!isAuthorized(config, req)) {
+            failures.set(req.ip, { count: (f?.count ?? 0) + 1, resetAt: f?.resetAt ?? now + AUTH_WINDOW_MS });
             return reply.status(401).send({ error: "Missing or wrong API token (Authorization: Bearer <API_TOKEN>)" });
           }
+        });
+      }
+      if (deps.backup) {
+        const backup = deps.backup;
+        // Anything but a read may have written; the scheduler uploads only if the database actually changed.
+        api.addHook("onResponse", async (req) => {
+          if (req.method !== "GET" && req.method !== "HEAD" && req.method !== "OPTIONS") backup.touch();
         });
       }
       await coreRoutes(api, deps);
@@ -81,6 +112,7 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
   );
 
   app.addHook("onClose", async () => {
+    await deps.backup?.flush();
     if (!opts.db) db.close();
   });
 

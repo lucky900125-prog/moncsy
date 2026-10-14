@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 export type AIProviderName = "anthropic" | "openai" | "ollama" | "mock";
 export type RevolutMode = "business-api" | "open-banking" | "csv";
 
@@ -8,6 +10,8 @@ export interface AppConfig {
   corsOrigin: string;
   /** when set, every /api route except /health needs "Authorization: Bearer <apiToken>" */
   apiToken: string | undefined;
+  /** number of reverse proxies in front of the server whose X-Forwarded-For is trusted; 0 = none */
+  trustProxyHops: number;
   defaultCurrency: string;
   /** time zone of the wall-clock times written in bank statements */
   statementTz: string;
@@ -77,7 +81,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     host: env.HOST || "127.0.0.1",
     dbPath: env.DB_PATH || "./data/expense.db",
     corsOrigin: env.CORS_ORIGIN || "http://localhost:5173,http://localhost:4173",
-    apiToken: env.API_TOKEN?.trim() || undefined,
+    apiToken: (env.API_TOKEN_FILE ? readFileSync(env.API_TOKEN_FILE, "utf8") : env.API_TOKEN)?.trim() || undefined,
+    trustProxyHops: Number(env.TRUST_PROXY_HOPS || 0),
     defaultCurrency: (env.DEFAULT_CURRENCY || "HUF").toUpperCase(),
     statementTz: env.STATEMENT_TZ || "Europe/Budapest",
     ai: {
