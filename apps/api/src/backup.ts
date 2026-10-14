@@ -120,6 +120,23 @@ export function decryptBlob(blob: Buffer, key: Buffer): { data: Buffer; generati
 /** The remote file changed since this instance last read or wrote it (GitHub 409, or 422 for a missing sha). */
 export class RemoteChangedError extends Error {}
 
+/** A GitHub answer that is not a success. `lasting` when no retry can fix it: a token that expired, was revoked or lost access. */
+export class GithubError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly lasting: boolean,
+  ) {
+    super(message);
+  }
+}
+
+/** 403 is also GitHub's rate limit (docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api), which passes by itself. */
+function githubError(res: Response, body: string, message: string): GithubError {
+  const limited = res.headers.get("x-ratelimit-remaining") === "0" || res.headers.has("retry-after") || /rate limit/i.test(body);
+  return new GithubError(message, res.status, res.status === 401 || res.status === 404 || (res.status === 403 && !limited));
+}
+
 /** The GitHub contents API, used for exactly one file. */
 export class GithubStore {
   /** sha of the remote file as this instance last read or wrote it; null = no file */
@@ -168,16 +185,20 @@ export class GithubStore {
       // GitHub also answers 404 for a private repository the token cannot see; only a readable repository makes it "no file yet".
       const repo = await this.call(this.repoUrl(), { headers: this.headers("application/vnd.github+json") });
       if (!repo.ok) {
-        throw new Error(`GitHub ${repo.status}: repository ${this.cfg.repo} not found, or BACKUP_GITHUB_TOKEN cannot read it`);
+        const body = await repo.text();
+        throw githubError(repo, body, `GitHub ${repo.status}: repository ${this.cfg.repo} not found, or BACKUP_GITHUB_TOKEN cannot read it`);
       }
       this.sha = null;
       this.known = true;
       return null;
     }
-    if (!meta.ok) throw new Error(`GitHub ${meta.status} reading ${this.cfg.repo}/${this.cfg.path}: ${(await meta.text()).slice(0, 200)}`);
+    if (!meta.ok) {
+      const body = await meta.text();
+      throw githubError(meta, body, `GitHub ${meta.status} reading ${this.cfg.repo}/${this.cfg.path}: ${body.slice(0, 200)}`);
+    }
     const sha = ((await meta.json()) as { sha: string }).sha;
     const raw = await this.call(this.url(), { headers: this.headers("application/vnd.github.raw+json") });
-    if (!raw.ok) throw new Error(`GitHub ${raw.status} downloading ${this.cfg.repo}/${this.cfg.path}`);
+    if (!raw.ok) throw githubError(raw, await raw.text(), `GitHub ${raw.status} downloading ${this.cfg.repo}/${this.cfg.path}`);
     const blob = Buffer.from(await raw.arrayBuffer());
     this.sha = sha;
     this.known = true;
@@ -194,7 +215,7 @@ export class GithubStore {
     });
     // A repository without any commit, the state a new backup repository starts in, answers 409.
     if (res.status === 409) return { commits: 0, maxGeneration: null };
-    if (!res.ok) throw new Error(`GitHub ${res.status} reading the history of ${this.cfg.repo}/${this.cfg.path}`);
+    if (!res.ok) throw githubError(res, await res.text(), `GitHub ${res.status} reading the history of ${this.cfg.repo}/${this.cfg.path}`);
     const list = (await res.json()) as { commit: { message: string } }[];
     const generations = list.map((c) => /^backup (\d+) /.exec(c.commit.message)?.[1]).filter((g) => g !== undefined).map(Number);
     return { commits: list.length, maxGeneration: generations.length ? Math.max(...generations) : null };
@@ -215,7 +236,7 @@ export class GithubStore {
       if (res.status === 409 || res.status === 422) {
         throw new RemoteChangedError(`GitHub ${res.status} writing ${this.cfg.repo}/${this.cfg.path}; the file changed since it was read: ${text}`);
       }
-      throw new Error(`GitHub ${res.status} writing ${this.cfg.repo}/${this.cfg.path}: ${text}`);
+      throw githubError(res, text, `GitHub ${res.status} writing ${this.cfg.repo}/${this.cfg.path}: ${text}`);
     }
     this.sha = ((await res.json()) as { content: { sha: string } }).content.sha;
     this.known = true;
@@ -390,6 +411,9 @@ export async function verifyBackup(cfg: BackupConfig, store = new GithubStore(cf
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** How long a change may wait for a failing upload before writes are refused until one succeeds. */
+const UNSAVED_LIMIT_MS = 5 * 60_000;
+
 /** Uploads a consistent snapshot a few seconds after the database last changed, one upload at a time. */
 export class BackupScheduler {
   private timer: NodeJS.Timeout | null = null;
@@ -422,6 +446,22 @@ export class BackupScheduler {
 
   getStatus(): BackupStatus {
     return { ...this.status };
+  }
+
+  /**
+   * Why a write has to be refused now, or null. A write would exist only on this disk, which a host without a persistent
+   * disk wipes on restart: once uploads stopped that is true of every write, and while they fail, of the writes made after
+   * a change has waited UNSAVED_LIMIT_MS, until an upload succeeds. Refusing keeps the loss to what the client still has.
+   */
+  refusal(): string | null {
+    if (this.status.stopped) return `Changes are not saved: the backup has stopped (${this.status.lastError}). Reading and GET /api/export still work.`;
+    if (this.status.lastError !== null && this.pendingSince !== null && Date.now() - this.pendingSince > UNSAVED_LIMIT_MS) {
+      return (
+        `Changes are not saved: the backup has failed for more than ${UNSAVED_LIMIT_MS / 60_000} minutes (${this.status.lastError}). ` +
+        "Reading and GET /api/export still work, and writing works again after the next successful backup."
+      );
+    }
+    return null;
   }
 
   private async totalChanges(db: DB = this.db): Promise<number> {
@@ -582,6 +622,14 @@ export class BackupScheduler {
       }
       this.log.info(`backup ${generation} uploaded to ${this.cfg.repo}/${this.cfg.path} (${blob.length} bytes)`);
     } catch (e) {
+      if (e instanceof GithubError && e.lasting) {
+        this.stop(
+          `${e.message}. Retrying cannot fix this: the token expired, was revoked or lost access to ${this.cfg.repo}. ` +
+            `Before restarting, save the changes made since ${this.status.lastBackupAt ?? "the start"} with GET /api/export, ` +
+            "then set a working BACKUP_GITHUB_TOKEN and restart.",
+        );
+        return;
+      }
       this.status.lastError = (e as Error).message;
       this.log.error(`backup failed, will retry: ${(e as Error).message}`);
       // Retry later even if nothing else is written. A failed upload leaves the remote unknown, so the retry reads it
