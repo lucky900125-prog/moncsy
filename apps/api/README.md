@@ -17,22 +17,22 @@ The API uses SQLite through **`node:sqlite`**, which is built into Node 22, rath
 
 Everything above the database talks to the small async `DB` interface in `db.ts` (`all`, `get`, `run`, `exec`, `tx`, `close`), so another engine can be dropped in without touching the repository. `tx()` runs one transaction at a time; queries outside it wait for it to finish.
 
-The database is created at `DB_PATH` on first run. The default categories are seeded once. Their ids are stable English slugs and their names are Hungarian:
+The database is created at `DB_PATH` on first run. The default categories come from `packages/shared` (`DEFAULT_CATEGORIES`) and are seeded on every start with `INSERT OR IGNORE`: a category added to the list later appears in existing databases on the next start, while rows the user has edited are left alone. Their ids are stable English slugs and their names are Hungarian:
 
 | id | name | icon (lucide) | color |
 |---|---|---|---|
 | groceries | Élelmiszer | shopping-cart | #7c9a7e |
-| restaurant | Étterem | utensils | #c08b6a |
-| transport | Közlekedés | bus | #6f8fa8 |
-| housing | Lakhatás | home | #9a8577 |
-| utilities | Rezsi | zap | #c2a65f |
-| entertainment | Szórakozás | film | #a07fa3 |
-| health | Egészség | heart-pulse | #c47f86 |
-| clothing | Ruházat | shirt | #8c8fb3 |
-| travel | Utazás | plane | #5f9c9a |
-| subscriptions | Előfizetések | repeat | #8a9bb0 |
-| other | Egyéb | circle-ellipsis | #9e9e94 |
-| income | Bevétel | wallet | #6e9f72 |
+| restaurant | Étterem | utensils-crossed | #c4956c |
+| transport | Közlekedés | bus | #8aa6b8 |
+| housing | Lakhatás | home | #9d8fb5 |
+| utilities | Rezsi | zap | #c9a66b |
+| entertainment | Szórakozás | film | #b5899f |
+| health | Egészség | heart-pulse | #b88a8a |
+| clothing | Ruházat | shirt | #7fa8a3 |
+| travel | Utazás | plane | #8f9bb3 |
+| subscriptions | Előfizetések | repeat | #a3a86b |
+| other | Egyéb | package | #94a3a8 |
+| income | Bevétel | wallet | #6f8f73 |
 
 ### Off-site backup (`src/backup.ts`)
 
