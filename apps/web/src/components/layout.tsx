@@ -21,7 +21,7 @@ function Logo() {
   return (
     <div className="flex items-center gap-2.5 px-2">
       <img src="/icon.svg" alt="" className="size-8 rounded-lg" />
-      <span className="text-[15px] font-semibold tracking-tight">Kassza</span>
+      <span className="text-[15px] font-semibold tracking-tight">moncsy</span>
     </div>
   );
 }

@@ -4,7 +4,7 @@ import { uid } from "./utils";
 
 /** Local, offline backend used when the API is not reachable. Data lives in localStorage. */
 
-const KEY = "kassza-demo-v1";
+const KEY = "moncsy-demo-v1";
 
 export const DEFAULT_CATEGORIES: Category[] = [
   { id: "groceries", name: "Élelmiszer", icon: "shopping-cart", color: "#7c9a7e", isCustom: false, budget: 120000 },

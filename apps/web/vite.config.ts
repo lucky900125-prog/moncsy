@@ -12,8 +12,8 @@ export default defineConfig({
       registerType: "autoUpdate",
       includeAssets: ["icon.svg"],
       manifest: {
-        name: "Kassza – kiadáskövető",
-        short_name: "Kassza",
+        name: "moncsy – kiadáskövető",
+        short_name: "moncsy",
         description: "Letisztult kiadáskövető blokkbeolvasással és AI elemzéssel",
         theme_color: "#f6f5f1",
         background_color: "#f6f5f1",

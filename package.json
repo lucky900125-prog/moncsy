@@ -1,5 +1,5 @@
 {
-  "name": "expense-tracker",
+  "name": "moncsy",
   "private": true,
   "scripts": {
     "dev:web": "pnpm --filter @et/web dev",

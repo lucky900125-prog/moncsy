@@ -33,7 +33,7 @@ export class ApiError extends Error {
 
 export function getApiBase() {
   try {
-    return (localStorage.getItem("kassza-api") || "").replace(/\/$/, "") + "/api";
+    return (localStorage.getItem("moncsy-api") || "").replace(/\/$/, "") + "/api";
   } catch {
     return "/api";
   }

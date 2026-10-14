@@ -26,7 +26,7 @@ export function SettingsPage() {
   const { backend, refresh } = useApp();
   const [theme, setThemeState] = useState<Theme>(getTheme);
   const [apiUrl, setApiUrl] = useState(() => {
-    try { return localStorage.getItem("kassza-api") ?? ""; } catch { return ""; }
+    try { return localStorage.getItem("moncsy-api") ?? ""; } catch { return ""; }
   });
   const [revolut, setRevolut] = useState<RevolutStatus | null>(null);
   const [revolutError, setRevolutError] = useState<string | null>(null);
@@ -54,7 +54,7 @@ export function SettingsPage() {
       const blob = await backend!.exportFile(format);
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = `kassza-export-${new Date().toISOString().slice(0, 10)}.${format}`;
+      a.download = `moncsy-export-${new Date().toISOString().slice(0, 10)}.${format}`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -149,11 +149,11 @@ export function SettingsPage() {
           <div className="grid gap-1.5">
             <Label htmlFor="api">API cím (üresen: ugyanaz a domain)</Label>
             <div className="flex gap-2">
-              <Input id="api" value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="https://kassza.example.com" />
+              <Input id="api" value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="https://moncsy.example.com" />
               <Button
                 variant="secondary"
                 onClick={() => {
-                  try { localStorage.setItem("kassza-api", apiUrl.trim()); } catch { /* blocked storage */ }
+                  try { localStorage.setItem("moncsy-api", apiUrl.trim()); } catch { /* blocked storage */ }
                   location.reload();
                 }}
               >

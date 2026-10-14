@@ -6,12 +6,12 @@
     <meta name="theme-color" content="#f6f5f1" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#16171a" media="(prefers-color-scheme: dark)" />
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
-    <title>Kassza</title>
+    <title>moncsy</title>
     <script>
       // Apply theme before first paint so there is no light/dark flash.
       (function () {
         try {
-          var t = localStorage.getItem("kassza-theme") || "system";
+          var t = localStorage.getItem("moncsy-theme") || "system";
           var dark = t === "dark" || (t === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
           document.documentElement.classList.toggle("dark", dark);
         } catch (e) {}

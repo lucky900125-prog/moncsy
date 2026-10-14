@@ -1,4 +1,4 @@
-# Kassza – kiadáskövető
+# moncsy – kiadáskövető
 
 Monorepo (pnpm workspace):
 

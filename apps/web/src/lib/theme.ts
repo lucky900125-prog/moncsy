@@ -2,7 +2,7 @@ export type Theme = "light" | "dark" | "system";
 
 export function getTheme(): Theme {
   try {
-    return (localStorage.getItem("kassza-theme") as Theme) || "system";
+    return (localStorage.getItem("moncsy-theme") as Theme) || "system";
   } catch {
     return "system";
   }
@@ -11,7 +11,7 @@ export function getTheme(): Theme {
 /** Switches theme with a short color cross-fade instead of a hard flip. */
 export function setTheme(t: Theme) {
   try {
-    localStorage.setItem("kassza-theme", t);
+    localStorage.setItem("moncsy-theme", t);
   } catch { /* storage blocked: theme still applies for this session */ }
   const root = document.documentElement;
   const dark = t === "dark" || (t === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
