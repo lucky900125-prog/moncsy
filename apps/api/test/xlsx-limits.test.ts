@@ -83,6 +83,8 @@ const amplifiers: [string, () => Promise<Buffer>, RegExp][] = [
   ["a merge over the whole sheet", () => rewritten(SHEET, merge("A52:XFD1048576")), /^The XLSX file merges \d+ cells/],
   ["a column range of 50 million", () => rewritten(SHEET, (x) => x.replace("<sheetData>", '<cols><col min="1" max="50000000" width="10"/></cols><sheetData>')), /describes column 50000000/],
   ["a validation over the whole sheet", () => rewritten(SHEET, validation("A1:XFD1048576")), /has data validation on \d+ cells/],
+  // More than the reading thread holds beside the data, so refused with a message rather than after running out.
+  ["a validation over a whole column", () => rewritten(SHEET, validation("D1:D1048576")), /has data validation on 1048576 cells/],
   ["a defined name over the whole sheet", () => rewritten("xl/workbook.xml", name("$A$1:$XFD$1048576")), /defined names cover \d+ cells/],
 ];
 
@@ -148,10 +150,10 @@ describe("uploaded XLSX limits", () => {
     // Counted, not loaded: reading any of them takes ExcelJS seconds of CPU before it runs out of memory.
     expect(performance.now() - started).toBeLessThan(10_000);
     expect((await app.inject("/api/health")).statusCode).toBe(200);
-    // What legitimate files do is read as usual: a merged header, validation on a whole column, a print title,
-    // columns formatted to the sheet's end.
+    // What legitimate files do is read as usual: a merged header, validation on a table's column, columns formatted
+    // to the sheet's end.
     const usual = await rewritten(SHEET, (x) =>
-      validation("D1:D1048576")(merge("D1:E1")(x)).replace("<sheetData>", '<cols><col min="4" max="16384" width="10" hidden="1"/></cols><sheetData>'),
+      validation("D2:D10000")(merge("D1:E1")(x)).replace("<sheetData>", '<cols><col min="4" max="16384" width="10" hidden="1"/></cols><sheetData>'),
     );
     expect((await parse(usual)).transactions).toHaveLength(50);
     await app.close();
@@ -160,8 +162,8 @@ describe("uploaded XLSX limits", () => {
   it("reads a workbook in a thread whose memory runs out instead of the server's", async () => {
     // Every range within its own limit, together more than the reading thread may use.
     const data = await (async () => {
-      const entries = unzip(await rewritten(SHEET, (x) => validation("A1:A1048576")(merge("D60:H20059")(x))));
-      return zip(entries.map(([n, d]) => [n, n === "xl/workbook.xml" ? Buffer.from(name("$B$1:$B$1048576")(d.toString())) : d]));
+      const entries = unzip(await rewritten(SHEET, (x) => validation("A1:A200000")(merge("D60:H20059")(x))));
+      return zip(entries.map(([n, d]) => [n, n === "xl/workbook.xml" ? Buffer.from(name("$B$1:$B$200000")(d.toString())) : d]));
     })();
     const app = await testApp();
     const res = await app.inject({ method: "POST", url: "/api/statements/parse", ...multipart("kivonat.xlsx", "application/octet-stream", data) });

@@ -12,8 +12,12 @@ export const MAX_XLSX_UNPACKED_BYTES = 20 * 1024 * 1024;
 /** Far more than any bank statement or export has; a cell far out would otherwise make the arrays that long. */
 export const MAX_XLSX_ROWS = 100_000;
 export const MAX_XLSX_COLUMNS = 200;
-/** The reading thread's heap, and how long it may take. */
-export const XLSX_WORKER_HEAP_MB = 192;
+/**
+ * The reading thread's heap, and how long it may take. Render's free plan kills the service at 512 MB, and the main
+ * thread alone stays at 250-330 MB after reading a large statement, so the reader gets 96 MB: enough for 30 000 rows
+ * of a five-column statement or 20 000 rows of an export.
+ */
+export const XLSX_WORKER_HEAP_MB = 96;
 export const XLSX_WORKER_TIMEOUT_MS = 30_000;
 
 // Built JavaScript runs the built worker; in development and tests the module is TypeScript, and so is the worker.
@@ -27,7 +31,7 @@ function inWorker(data: Buffer, timeoutMs: number): Promise<WorkerOutput> {
     const input: WorkerInput = { data: new Uint8Array(data), maxRows: MAX_XLSX_ROWS, maxColumns: MAX_XLSX_COLUMNS, heapMb: XLSX_WORKER_HEAP_MB };
     const worker = new Worker(WORKER_URL, {
       workerData: input,
-      resourceLimits: { maxOldGenerationSizeMb: XLSX_WORKER_HEAP_MB, maxYoungGenerationSizeMb: 32 },
+      resourceLimits: { maxOldGenerationSizeMb: XLSX_WORKER_HEAP_MB, maxYoungGenerationSizeMb: 16 },
     });
     let settled = false;
     const settle = (f: () => void) => {
@@ -58,12 +62,13 @@ function inWorker(data: Buffer, timeoutMs: number): Promise<WorkerOutput> {
 /**
  * ExcelJS builds an object for every cell of a merge, a data validation and a defined name, and a column object for
  * every column of a <col> range. A small file can name the whole sheet (17 billion cells) in any of them, so they are
- * counted before it is loaded. Legitimate files merge a few header cells and validate at most whole columns; a sheet
- * has 16384 columns. Each limit alone takes ExcelJS about a second and some 120 MB to build.
+ * counted before it is loaded. Legitimate files merge a few header cells and validate a table's column; a sheet has
+ * 16384 columns. Each limit alone fits in the reader's heap beside a few thousand rows: validation or a name over a
+ * whole column (1 048 576 cells) does not, so such a file is refused here, with a message, rather than after a while.
  */
 const MAX_MERGED_CELLS = 100_000;
-const MAX_VALIDATED_CELLS = 1_048_576;
-const MAX_NAMED_CELLS = 1_048_576;
+const MAX_VALIDATED_CELLS = 200_000;
+const MAX_NAMED_CELLS = 200_000;
 const MAX_COLUMN = 16_384;
 
 const columnNumber = (letters: string) => [...letters].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0);
