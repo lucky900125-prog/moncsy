@@ -114,12 +114,18 @@ export class BusinessApiRevolutProvider implements RevolutProvider {
     ];
     const from = new Date(Math.min(...candidates)).toISOString();
     const all: BizTransaction[] = [];
+    const seenIds = new Set<string>();
     let to: string | undefined;
     for (let page = 0; page < 100; page++) {
       const q: Record<string, string> = { from, count: String(PAGE) };
       if (to) q.to = to;
       const batch = await this.get<BizTransaction[]>("/transactions", q);
-      all.push(...batch);
+      // Paging by `to = last created_at` can hand back the boundary item again; keep each transaction once.
+      for (const tx of batch) {
+        if (seenIds.has(tx.id)) continue;
+        seenIds.add(tx.id);
+        all.push(tx);
+      }
       if (batch.length < PAGE) break;
       const nextTo = batch[batch.length - 1]!.created_at;
       if (nextTo === to) break;
