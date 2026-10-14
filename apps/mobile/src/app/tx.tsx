@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import { Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router, useLocalSearchParams } from "expo-router";
 import { format } from "date-fns";
@@ -7,6 +7,7 @@ import { X } from "lucide-react-native";
 import type { Transaction } from "@et/shared";
 import { Button, CategoryBadge, Label, useTheme } from "@/components/ui";
 import { useData } from "@/lib/data";
+import { confirmDestructive, showError } from "@/lib/dialog";
 import { parseDraft, type Draft } from "@/lib/draft";
 import { money } from "@/lib/format";
 
@@ -83,7 +84,7 @@ function TxForm({ existing, draft, fromLink }: { existing?: Transaction; draft: 
       );
       router.back();
     } catch (e) {
-      Alert.alert("Mentés sikertelen", (e as Error).message);
+      showError("Mentés sikertelen", (e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -91,21 +92,14 @@ function TxForm({ existing, draft, fromLink }: { existing?: Transaction; draft: 
 
   function confirmDelete() {
     if (!existing) return;
-    Alert.alert("Törlöd a tételt?", existing.merchant, [
-      { text: "Mégse", style: "cancel" },
-      {
-        text: "Törlés",
-        style: "destructive",
-        onPress: async () => {
-          try {
-            await remove(existing.id);
-            router.back();
-          } catch (e) {
-            Alert.alert("Törlés sikertelen", (e as Error).message);
-          }
-        },
-      },
-    ]);
+    confirmDestructive("Törlöd a tételt?", existing.merchant, "Törlés", async () => {
+      try {
+        await remove(existing.id);
+        router.back();
+      } catch (e) {
+        showError("Törlés sikertelen", (e as Error).message);
+      }
+    });
   }
 
   const input = "h-11 rounded-xl border border-line bg-card px-3 text-fg dark:border-line-dark dark:bg-card-dark dark:text-fg-dark";
