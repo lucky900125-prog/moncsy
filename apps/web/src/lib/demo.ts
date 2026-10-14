@@ -1,4 +1,4 @@
-import type { AnalyzeResponse, Category, PackUnit, ReceiptItem, Transaction } from "@et/shared";
+import type { AnalyzeResponse, Category, PackUnit, ProductFilter, ReceiptItem, Transaction } from "@et/shared";
 import { buildProductStats, rankStores } from "@et/shared/products";
 import type { Backend, TxQuery } from "./backend";
 import { demoParseStatement } from "./demo-statement";
@@ -212,11 +212,11 @@ export const demoBackend: Backend = {
       confidence: 0.5,
       suggestedCategoryId: "groceries",
       items: [
-        { name: "Félzsíros tej 1,5l", quantity: 2, unitPrice: 459, total: 918 },
-        { name: "Teljes kiőrlésű kenyér", quantity: 1, unitPrice: 899, total: 899 },
-        { name: "Trappista sajt 500g", quantity: 1, unitPrice: 2199, total: 2199 },
-        { name: "Banán", quantity: 1, unitPrice: 749, total: 749 },
-        { name: "Csirkemell filé", quantity: 1, unitPrice: 3975, total: 3975 },
+        { name: "Félzsíros tej 1,5l", quantity: 2, unitPrice: 459, total: 918, product: "tej", brand: "Mizo", packSize: 1.5, packUnit: "l" },
+        { name: "Teljes kiőrlésű kenyér", quantity: 1, unitPrice: 899, total: 899, product: "kenyér", brand: null, packSize: 500, packUnit: "g" },
+        { name: "Trappista sajt 500g", quantity: 1, unitPrice: 2199, total: 2199, product: "trappista sajt", brand: "Tolle", packSize: 500, packUnit: "g" },
+        { name: "Banán", quantity: 1, unitPrice: 749, total: 749, product: "banán", brand: null, packSize: 1, packUnit: "kg" },
+        { name: "Csirkemell filé", quantity: 1, unitPrice: 3975, total: 3975, product: "csirkemell", brand: null, packSize: 1, packUnit: "kg" },
       ],
       rawText: "DEMÓ – nem valódi felismerés",
     };
@@ -225,7 +225,7 @@ export const demoBackend: Backend = {
     await sleep(900);
     const d = getDb();
     const tx = d.transactions.filter((t) => t.date >= req.from && t.date <= req.to);
-    if (req.scope === "products") return demoProductAnalysis(tx, req.question);
+    if (req.scope === "products") return demoProductAnalysis(tx, req.question, req.products);
     const exp = tx.filter((t) => t.amount < 0);
     const total = exp.reduce((s, t) => s - t.amount, 0);
     const byCat = new Map<string, number>();
@@ -266,12 +266,21 @@ export const demoBackend: Backend = {
   backupStatus: async () => null,
 };
 
-function demoProductAnalysis(tx: Transaction[], question?: string): AnalyzeResponse {
+function demoProductAnalysis(tx: Transaction[], question?: string, filter?: ProductFilter): AnalyzeResponse {
+  const low = (s: string) => s.toLocaleLowerCase("hu");
   const all = buildProductStats(tx);
+  // Same narrowing as the server's "products" filter (case-insensitive here; the server also ignores accents).
+  const filtered = all.filter(
+    (p) =>
+      (!filter?.q || low(`${p.product} ${p.history.map((h) => h.name).join(" ")}`).includes(low(filter.q))) &&
+      (!filter?.brand || low(p.brand ?? "") === low(filter.brand)) &&
+      (!filter?.merchant || p.stores.some((s) => low(s.store) === low(filter.merchant!))),
+  );
+  if (filter && filtered.length === 0) throw new Error("A szűrésnek egyik termék sem felel meg.");
   // Stand-in for the model reading the question: narrow to the brands or products it names, if any.
-  const q = (question ?? "").toLocaleLowerCase("hu");
-  const named = all.filter((p) => (p.brand && q.includes(p.brand.toLocaleLowerCase("hu"))) || q.includes(p.product.toLocaleLowerCase("hu")));
-  const stats = named.length ? named : all;
+  const q = low(question ?? "");
+  const named = filtered.filter((p) => (p.brand && q.includes(low(p.brand))) || q.includes(low(p.product)));
+  const stats = named.length ? named : filtered;
   if (stats.length === 0) throw new Error("Ebben az időszakban még nincs blokktétel. Olvass be blokkokat, hogy össze lehessen hasonlítani az árakat.");
   const compared = stats.filter((p) => p.cheapest);
   const best = rankStores(stats)[0];

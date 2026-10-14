@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { startOfMonth, subMonths } from "date-fns";
 import { ChevronDown, ScanLine, Search, Sparkles, Store, X } from "lucide-react";
+import type { ProductFilter } from "@et/shared";
 import { buildProductStats, rankStores, type ProductStat, type StorePrice } from "@et/shared/products";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -68,7 +69,13 @@ export function DetailsTab() {
     store ? `Mit éri meg inkább máshol venni, mint a ${store} boltban?` : "Mely termékek drágultak az utóbbi időben?",
   ];
 
-  function ask(text: string) {
+  // The AI gets the products the user is looking at: the current filters, or one product when asked from its row.
+  const currentFilter = (): ProductFilter | undefined => {
+    const f: ProductFilter = { q: q.trim() || undefined, brand: brandName ?? undefined, merchant: store ?? undefined };
+    return f.q || f.brand || f.merchant ? f : undefined;
+  };
+
+  function ask(text: string, products: ProductFilter | undefined = currentFilter()) {
     const from = rangeStart(r);
     const oldest = transactions.length ? transactions[transactions.length - 1]!.date : new Date().toISOString();
     setQuestion(text);
@@ -76,6 +83,7 @@ export function DetailsTab() {
       from: (from ?? new Date(oldest)).toISOString(),
       to: new Date().toISOString(),
       scope: "products",
+      products,
       question: text.trim() || undefined,
     });
     aiRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -161,7 +169,7 @@ export function DetailsTab() {
               p={p}
               open={open === p.key}
               onToggle={() => setOpen(open === p.key ? null : p.key)}
-              onAsk={() => ask(`Hol érdemes venni: ${productLabel(p)}?`)}
+              onAsk={() => ask(`Hol érdemes venni: ${productLabel(p)}?`, { q: p.product, brand: p.brand ?? undefined })}
               busy={a.busy}
               delay={Math.min(i, 8) * 30}
             />

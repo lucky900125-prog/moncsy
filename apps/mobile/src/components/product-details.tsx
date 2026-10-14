@@ -3,7 +3,7 @@ import { LayoutAnimation, Pressable, ScrollView, Text, TextInput, View } from "r
 import { format, startOfMonth, subMonths } from "date-fns";
 import { hu } from "date-fns/locale";
 import { ChevronDown, Search } from "lucide-react-native";
-import type { AnalyzeResponse } from "@et/shared";
+import type { AnalyzeResponse, ProductFilter } from "@et/shared";
 import { buildProductStats, rankStores, type ProductStat, type StorePrice } from "@et/shared/products";
 import { Button, Card, ErrorCard, Label, useTheme } from "@/components/ui";
 import { api } from "@/lib/api";
@@ -72,14 +72,20 @@ export function ProductDetails() {
   const shown = useMemo(() => (store ? selection.filter((p) => p.stores.some((s) => s.store === store)) : selection), [selection, store]);
   const ranking = useMemo(() => rankStores(selection), [selection]);
 
-  async function ask(text: string) {
+  // The AI gets the products the user is looking at: the current filters, or one product when asked from its row.
+  const currentFilter = (): ProductFilter | undefined => {
+    const f: ProductFilter = { q: q.trim() || undefined, brand: brand ?? undefined, merchant: store ?? undefined };
+    return f.q || f.brand || f.merchant ? f : undefined;
+  };
+
+  async function ask(text: string, products: ProductFilter | undefined = currentFilter()) {
     const from = rangeStart(r);
     const oldest = transactions.length ? transactions[transactions.length - 1]!.date : new Date().toISOString();
     setQuestion(text);
     setBusy(true);
     setError(null);
     try {
-      setRes(await api.analyze({ from: (from ?? new Date(oldest)).toISOString(), to: new Date().toISOString(), scope: "products", question: text.trim() || undefined }));
+      setRes(await api.analyze({ from: (from ?? new Date(oldest)).toISOString(), to: new Date().toISOString(), scope: "products", products, question: text.trim() || undefined }));
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -165,7 +171,7 @@ export function ProductDetails() {
             p={p}
             open={open === p.key}
             onToggle={() => { glide(); setOpen(open === p.key ? null : p.key); }}
-            onAsk={() => ask(`Hol érdemes venni: ${productLabel(p)}?`)}
+            onAsk={() => ask(`Hol érdemes venni: ${productLabel(p)}?`, { q: p.product, brand: p.brand ?? undefined })}
             busy={busy}
           />
         ))
