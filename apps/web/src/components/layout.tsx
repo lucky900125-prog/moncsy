@@ -90,7 +90,8 @@ export function Layout() {
           </div>
         </header>
 
-        <main key={location.pathname} className="mx-auto w-full max-w-5xl flex-1 animate-rise-in px-4 pb-28 pt-5 md:px-8 md:pb-10 md:pt-8">
+        {/* Keyed by the top-level section: switching tabs inside a section (Elemzés / Részletek) must not replay the page entrance. */}
+        <main key={location.pathname.split("/")[1]} className="mx-auto w-full max-w-5xl flex-1 animate-rise-in px-4 pb-28 pt-5 md:px-8 md:pb-10 md:pt-8">
           <Outlet />
         </main>
       </div>

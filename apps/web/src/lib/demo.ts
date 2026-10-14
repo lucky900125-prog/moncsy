@@ -224,7 +224,7 @@ export const demoBackend: Backend = {
     await sleep(900);
     const d = getDb();
     const tx = d.transactions.filter((t) => t.date >= req.from && t.date <= req.to);
-    if (req.scope === "products") return demoProductAnalysis(tx);
+    if (req.scope === "products") return demoProductAnalysis(tx, req.question);
     const exp = tx.filter((t) => t.amount < 0);
     const total = exp.reduce((s, t) => s - t.amount, 0);
     const byCat = new Map<string, number>();
@@ -253,8 +253,12 @@ export const demoBackend: Backend = {
   exportFile: () => notInDemo("Az XLSX/XML export"),
 };
 
-function demoProductAnalysis(tx: Transaction[]): AnalyzeResponse {
-  const stats = buildProductStats(tx);
+function demoProductAnalysis(tx: Transaction[], question?: string): AnalyzeResponse {
+  const all = buildProductStats(tx);
+  // Stand-in for the model reading the question: narrow to the brands or products it names, if any.
+  const q = (question ?? "").toLocaleLowerCase("hu");
+  const named = all.filter((p) => (p.brand && q.includes(p.brand.toLocaleLowerCase("hu"))) || q.includes(p.product.toLocaleLowerCase("hu")));
+  const stats = named.length ? named : all;
   if (stats.length === 0) throw new Error("Ebben az időszakban még nincs blokktétel. Olvass be blokkokat, hogy össze lehessen hasonlítani az árakat.");
   const compared = stats.filter((p) => p.cheapest);
   const best = rankStores(stats)[0];
