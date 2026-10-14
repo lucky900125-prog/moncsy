@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Camera, ImageUp, RotateCcw, Check, AlertCircle } from "lucide-react";
 import type { ReceiptScanResult } from "@et/shared";
 import { Card, CardContent } from "@/components/ui/card";
@@ -25,11 +25,13 @@ export function ScanPage() {
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
 
+  // Release the preview blob URL whenever it is replaced, cleared, or the page unmounts.
+  useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
+
   async function handle(file: File | undefined) {
     if (!file || !backend) return;
     setError(null);
     setResult(null);
-    if (preview) URL.revokeObjectURL(preview);
     setPreview(file.type.startsWith("image/") ? URL.createObjectURL(file) : null);
     setPhase("scanning");
     try {
@@ -44,7 +46,6 @@ export function ScanPage() {
   }
 
   function reset() {
-    if (preview) URL.revokeObjectURL(preview);
     setPreview(null);
     setResult(null);
     setError(null);
