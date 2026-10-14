@@ -100,9 +100,12 @@ export function parseOfx(text: string, timeZone: string): FormatResult {
   const seen = new Map<string, number>();
   blocks.forEach((b, i) => {
     try {
-      const amount = parseAmount(tag(b, "TRNAMT"), ".");
+      // OFX allows a comma as the decimal mark and no thousands separator, so the last mark in the value is the decimal one.
+      const rawAmount = tag(b, "TRNAMT");
+      const amount = parseAmount(rawAmount, rawAmount.lastIndexOf(",") > rawAmount.lastIndexOf(".") ? "," : ".");
       if (amount === null) throw new Error("no TRNAMT");
-      const ccy = tag(b, "CURSYM") || currency;
+      // CURSYM in <CURRENCY> is the currency of the amount; in <ORIGCURRENCY> the amount is already in CURDEF.
+      const ccy = b.match(/<CURRENCY>(?:(?!<\/?(?:ORIG)?CURRENCY>)[\s\S])*?<CURSYM>\s*([A-Za-z]{3})/i)?.[1]?.toUpperCase() || currency;
       if (!ccy) throw new Error("no currency (CURDEF)");
       const posted = tag(b, "DTPOSTED") || tag(b, "DTUSER");
       if (!posted) throw new Error("no DTPOSTED");

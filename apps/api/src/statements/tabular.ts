@@ -199,7 +199,10 @@ export function parseTabular(rows: Cell[][], opts: TabularOptions): TabularResul
         .slice(0, 2000);
       const ref = text("reference");
       const tx: StatementTx = {
-        externalId: ref ? rowExternalId(["ref", ref], seen) : rowExternalId([date, amount.toFixed(2), currency, counterparty, description], seen),
+        // A reference column can repeat across files (a customer or creditor id, a per-file row number), so it never stands alone.
+        externalId: ref
+          ? rowExternalId(["ref", ref, date.slice(0, 10), amount.toFixed(2)], seen)
+          : rowExternalId([date, amount.toFixed(2), currency, counterparty, description], seen),
         date,
         amount: Math.round(amount * 100) / 100,
         currency,

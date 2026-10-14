@@ -112,6 +112,19 @@ describe("tabular statements", () => {
     expect((await parse("kivonat.csv", csv)).transactions.map((t) => t.externalId)).toEqual(r.transactions.map((t) => t.externalId));
   });
 
+  it("keeps rows of different statements apart when the reference column repeats", async () => {
+    const head = "Dátum;Összeg;Partner;Azonosító\n";
+    const sep = await parse("szept.csv", `${head}2026.09.02.;-1000;Tesco;123456\n2026.09.03.;-2000;Spar;123456\n`);
+    const oct = await parse("okt.csv", `${head}2026.10.02.;-7777;MOL;123456\n2026.10.03.;-8888;Lidl;123456\n`);
+    expect(sep.mapping).toMatchObject({ reference: "Azonosító" });
+    const ids = [...sep.transactions, ...oct.transactions].map((t) => t.externalId);
+    expect(new Set(ids).size).toBe(4);
+    // The same file read twice still gives the same ids, so a second import skips it.
+    expect((await parse("szept.csv", `${head}2026.09.02.;-1000;Tesco;123456\n2026.09.03.;-2000;Spar;123456\n`)).transactions.map((t) => t.externalId)).toEqual(
+      sep.transactions.map((t) => t.externalId),
+    );
+  });
+
   it("reads separate debit and credit columns and a direction column", () => {
     const debitCredit = parseTabular(
       [
@@ -226,6 +239,25 @@ DATA:OFXSGML
     expect(r.transactions).toMatchObject([
       { merchant: "Lidl", amount: -12.5, currency: "EUR", note: "card" },
       { merchant: "Refund", amount: 100, currency: "EUR" },
+    ]);
+  });
+
+  it("reads OFX decimal commas, and the currency of the amount rather than the original one", async () => {
+    const ofx = `OFXHEADER:100
+DATA:OFXSGML
+
+<OFX><BANKMSGSRSV1><STMTTRNRS><STMTRS><CURDEF>HUF
+<BANKTRANLIST>
+<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20261003<TRNAMT>-12,50<FITID>B1<NAME>Lidl<CURRENCY><CURRATE>385<CURSYM>EUR</CURRENCY>
+<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20261004<TRNAMT>-3850.00<FITID>B2<NAME>Shop Berlin<ORIGCURRENCY><CURRATE>0.0026<CURSYM>EUR</ORIGCURRENCY>
+<STMTTRN><TRNTYPE>CREDIT<DTPOSTED>20261005<TRNAMT>1234,56<FITID>B3<NAME>Refund
+</BANKTRANLIST></STMTRS></STMTTRNRS></BANKMSGSRSV1></OFX>`;
+    const r = await parse("bank.ofx", ofx);
+    expect(r.errors).toEqual([]);
+    expect(r.transactions).toMatchObject([
+      { merchant: "Lidl", amount: -12.5, currency: "EUR" },
+      { merchant: "Shop Berlin", amount: -3850, currency: "HUF" },
+      { merchant: "Refund", amount: 1234.56, currency: "HUF" },
     ]);
   });
 
