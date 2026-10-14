@@ -8,6 +8,15 @@ import { api } from "@/lib/api";
 import { useData } from "@/lib/data";
 import { money } from "@/lib/format";
 
+/**
+ * The API gives the receipt's day as YYYY-MM-DD, which new Date() reads as UTC midnight: 02:00 in Budapest and the
+ * previous day west of UTC. Noon local time keeps the printed day.
+ */
+function receiptDate(d: string) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
+  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12) : new Date(d);
+}
+
 export default function Scan() {
   const { categoryMap } = useData();
   const [uri, setUri] = useState<string | null>(null);
@@ -48,7 +57,7 @@ export default function Scan() {
           amount: result.total != null ? -Math.abs(result.total) : undefined,
           currency: result.currency ?? "HUF",
           merchant: result.merchant ?? "",
-          date: result.date ? new Date(result.date).toISOString() : new Date().toISOString(),
+          date: (result.date ? receiptDate(result.date) : new Date()).toISOString(),
           categoryId: result.suggestedCategoryId,
           items: result.items,
           source: "receipt",
