@@ -86,7 +86,7 @@ export async function scanReceipt(
   fileBase64: string,
   mime: string,
 ): Promise<ReceiptScanResult> {
-  const raw = await ai.vision(fileBase64, mime, receiptPrompt(categories), { json: true, maxTokens: 4000, temperature: 0 });
+  const raw = await ai.vision(fileBase64, mime, receiptPrompt(categories), { json: true, maxTokens: 16000, temperature: 0 });
   const r = parseModelJson(ai.name, raw, modelReceiptSchema);
   const known = new Set(categories.map((c) => c.id));
   const out: ReceiptScanResult = {

@@ -236,7 +236,7 @@ export async function analyze(ai: AIProvider, req: AnalyzeRequest, agg: Aggregat
       { role: "system", content: products ? PRODUCTS_SYSTEM : SYSTEM },
       { role: "user", content: user },
     ],
-    { json: true, maxTokens: 4000, temperature: 0.2 },
+    { json: true, maxTokens: 16000, temperature: 0.2 },
   );
   const r = parseModelJson(ai.name, raw, analysisSchema);
   return { provider: ai.name, model: ai.model, summary: r.summary, insights: r.insights };

@@ -30,6 +30,19 @@ export async function postJson(
   }
 }
 
+/**
+ * The model stopped at the token limit, so its JSON is incomplete. That is a property of the input (a long statement,
+ * a dense receipt), not a failure of the provider, so it is a 422 that says what to do instead of a 502.
+ */
+export function cutOff(provider: string, maxTokens: number | undefined): HttpError {
+  return new HttpError(
+    422,
+    `The AI answer was cut off at ${maxTokens ? `${maxTokens} tokens` : "the provider's token limit"} (${provider}): ` +
+      "the document or question needs a longer answer than one request gives. " +
+      "Split the document into smaller parts; for a bank statement, export it as CSV or XLSX instead.",
+  );
+}
+
 export function unsupportedMedia(provider: string, mime: string, hint = ""): HttpError {
   return new HttpError(415, `AI provider "${provider}" cannot read ${mime} files${hint ? `: ${hint}` : ""}`);
 }
