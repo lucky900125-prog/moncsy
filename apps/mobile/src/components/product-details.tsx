@@ -17,7 +17,9 @@ const RANGES: { value: Range; label: string }[] = [
   { value: "all", label: "Összes" },
 ];
 
-const unitLabel = (p: ProductStat) => (p.baseUnit ? `/${p.baseUnit}` : "/db");
+// Without a package size the price is per receipt unit. A fractional quantity means goods sold by weight or volume,
+// and the line does not say whether that is kg or l, so no unit is shown rather than a wrong "/db".
+const unitLabel = (p: ProductStat) => (p.baseUnit ? `/${p.baseUnit}` : p.history.every((h) => Number.isInteger(h.quantity)) ? "/db" : "");
 const priceOf = (p: ProductStat, s: StorePrice) => (p.baseUnit ? (s.avgBasePrice ?? s.avgUnitPrice) : s.avgUnitPrice);
 /** Stores sharing the lowest price; cheapest is null when there are two or more of them. */
 const tiedAtBest = (p: ProductStat) => p.stores.filter((s) => priceOf(p, s) === priceOf(p, p.stores[0]!)).map((s) => s.store);
