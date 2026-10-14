@@ -1,5 +1,6 @@
 import type {
-  AnalyzeRequest, AnalyzeResponse, Category, ReceiptScanResult, RevolutStatus, Transaction,
+  AnalyzeRequest, AnalyzeResponse, Category, ReceiptScanResult, RevolutStatus, StatementMapping, StatementPreview, StatementTx,
+  Transaction,
 } from "@et/shared";
 import { demoBackend } from "./demo";
 
@@ -22,6 +23,9 @@ export interface Backend {
   revolutSync(): Promise<ImportResult>;
   revolutImportStatement(file: File): Promise<ImportResult>;
   importFile(file: File): Promise<ImportResult>;
+  /** Reads any bank statement; nothing is saved until importStatement. */
+  parseStatement(file: File, opts?: { mapping?: StatementMapping; currency?: string }): Promise<StatementPreview>;
+  importStatement(transactions: StatementTx[]): Promise<ImportResult>;
   exportFile(format: "xlsx" | "xml", range?: { from?: string; to?: string }): Promise<Blob>;
 }
 
@@ -31,22 +35,47 @@ export class ApiError extends Error {
   }
 }
 
+const API_KEY = "moncsy-api";
+const TOKEN_KEY = "moncsy-api-token";
+
 export function getApiBase() {
   try {
-    return (localStorage.getItem("moncsy-api") || "").replace(/\/$/, "") + "/api";
+    return (localStorage.getItem(API_KEY) || "").replace(/\/$/, "") + "/api";
   } catch {
     return "/api";
   }
 }
 
+export function getApiToken() {
+  try {
+    return localStorage.getItem(TOKEN_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/** Saves the connection; the caller reloads the page so the backend is detected again. */
+export function saveConnection(url: string, token: string) {
+  localStorage.setItem(API_KEY, url.trim());
+  if (token.trim()) localStorage.setItem(TOKEN_KEY, token.trim());
+  else localStorage.removeItem(TOKEN_KEY);
+}
+
+function withAuth(init: RequestInit = {}): RequestInit {
+  const token = getApiToken();
+  if (!token) return init;
+  return { ...init, headers: { ...(init.headers as Record<string, string> | undefined), Authorization: `Bearer ${token}` } };
+}
+
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(getApiBase() + path, init);
+  const res = await fetch(getApiBase() + path, withAuth(init));
   if (!res.ok) {
     let msg = `${res.status} ${res.statusText}`;
     try {
       const body = await res.json();
       msg = body.message || body.error || msg;
     } catch { /* body was not JSON; keep status text */ }
+    if (res.status === 401) msg = "Az API tokent kér, vagy a megadott token hibás. Add meg a Beállítások / Kapcsolat alatt.";
     throw new ApiError(res.status, msg);
   }
   if (res.status === 204) return undefined as T;
@@ -59,8 +88,10 @@ const json = (method: string, body: unknown): RequestInit => ({
   body: JSON.stringify(body),
 });
 
-const upload = (file: File): RequestInit => {
+const upload = (file: File, fields: Record<string, string | undefined> = {}): RequestInit => {
   const fd = new FormData();
+  // The server reads text fields only when they come before the file.
+  for (const [k, v] of Object.entries(fields)) if (v) fd.append(k, v);
   fd.append("file", file);
   return { method: "POST", body: fd };
 };
@@ -87,8 +118,11 @@ export const apiBackend: Backend = {
   revolutSync: () => call("/revolut/sync", { method: "POST" }),
   revolutImportStatement: (file) => call("/revolut/import-statement", upload(file)),
   importFile: (file) => call("/import", upload(file)),
+  parseStatement: (file, opts = {}) =>
+    call("/statements/parse", upload(file, { mapping: opts.mapping ? JSON.stringify(opts.mapping) : undefined, currency: opts.currency })),
+  importStatement: (transactions) => call("/statements/import", json("POST", { transactions })),
   exportFile: async (format, range) => {
-    const res = await fetch(getApiBase() + `/export${qs({ format, ...range })}`);
+    const res = await fetch(getApiBase() + `/export${qs({ format, ...range })}`, withAuth());
     if (!res.ok) throw new ApiError(res.status, `Export sikertelen: ${res.status} ${res.statusText}`);
     return res.blob();
   },
