@@ -119,6 +119,31 @@ describe("tabular statements", () => {
     expect((await parse("kivonat.csv", csv)).transactions.map((t) => t.externalId)).toEqual(r.transactions.map((t) => t.externalId));
   });
 
+  it("takes the header right above the transactions, not a summary line above it that names a date and an amount", async () => {
+    const csv = [
+      "Kivonat dátuma;2026.10.31.;Záró összeg;792 235,00",
+      "Számlaszám;11773016-12345678",
+      "",
+      "Könyvelés dátuma;Partner neve;Közlemény;Összeg",
+      "Nyitó egyenleg;;;111 020,00",
+      "2026.10.02.;SPAR;Kártyás vásárlás;-4 785,00",
+      "2026.10.05.;Példa Kft.;Munkabér;685 000,00",
+    ].join("\n");
+    const r = await parse("kivonat.csv", csv);
+    expect(r.columns).toEqual(["Könyvelés dátuma", "Partner neve", "Közlemény", "Összeg"]);
+    // A row between the header and the first transaction does not stop the header being found; it is reported.
+    expect(r.errors).toEqual(['Row 5: invalid date "Nyitó egyenleg"']);
+    expect(r.transactions.map((t) => [t.merchant, t.amount])).toEqual([
+      ["SPAR", -4785],
+      ["Példa Kft.", 685000],
+    ]);
+    // Column names nobody recognises: the row offered for choosing them by hand is still the one above the transactions.
+    const unknown = ["Számlaszám;11773016-12345678", "Időszak;2026.10.01.-2026.10.31.", "Mikor;Kinek;Mennyi", "2026.10.02.;SPAR;-4 785,00"].join("\n");
+    expect((await parse("kivonat.csv", unknown)).columns).toEqual(["Mikor", "Kinek", "Mennyi"]);
+    const mapped = await parse("kivonat.csv", unknown, { mapping: { date: "Mikor", amount: "Mennyi", counterparty: "Kinek" } });
+    expect(mapped.transactions.map((t) => [t.merchant, t.amount])).toEqual([["SPAR", -4785]]);
+  });
+
   it("keeps rows of different statements apart when the reference column repeats", async () => {
     const head = "Dátum;Összeg;Partner;Azonosító\n";
     const sep = await parse("szept.csv", `${head}2026.09.02.;-1000;Tesco;123456\n2026.09.03.;-2000;Spar;123456\n`);

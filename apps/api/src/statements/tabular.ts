@@ -74,17 +74,71 @@ export function detectMapping(header: string[], explicit: StatementMapping = {})
 
 const usable = (m: StatementMapping) => Boolean((m.date || m.valueDate) && (m.amount || m.debit || m.credit));
 
+type ColumnIndex = Partial<Record<StatementRole, number>>;
+
+const columnIndex = (mapping: StatementMapping, columns: string[]): ColumnIndex =>
+  Object.fromEntries(Object.entries(mapping).map(([r, c]) => [r, columns.indexOf(c!)]));
+
+const isBlank = (c: Cell | undefined) => c == null || String(c).trim() === "";
+
 /**
- * Banks put account details above the table, so the header is the first of the top rows that maps to a
- * date and an amount. Returns its index, or -1.
+ * Banks put account details above the table, so the header is searched for in the top rows. A summary line
+ * ("Kivonat dátuma … Záró összeg …") can name a date and an amount too, so the header is the last row that does
+ * before the first transaction, read with that row's columns. When no transaction follows any such row (a
+ * header-only file, dates in a format that is not read), the first of them is taken. Returns its index, or -1.
  */
-export function findHeaderRow(rows: Cell[][]): number {
-  for (let i = 0; i < Math.min(rows.length, 40); i++) {
+export function findHeaderRow(rows: Cell[][], timeZone: string): number {
+  let first = -1;
+  let header: { i: number; idx: ColumnIndex } | null = null;
+  // The header is looked for in the first 40 rows, and its first transaction in the 40 after that.
+  for (let i = 0; i < Math.min(rows.length, 80); i++) {
+    if (header && isTransactionRow(rows[i]!, header.idx, timeZone)) return header.i;
+    if (i >= 40) continue;
     const cells = rows[i]!.map((c) => (c == null ? "" : String(c).trim()));
     if (cells.filter(Boolean).length < 2) continue;
-    if (usable(detectMapping(cells))) return i;
+    const mapping = detectMapping(cells);
+    if (!usable(mapping)) continue;
+    if (first < 0) first = i;
+    header = { i, idx: columnIndex(mapping, cells) };
   }
-  return -1;
+  return first;
+}
+
+/** A date (as text or a real date) and, in another cell, an amount. */
+function looksLikeTransaction(r: Cell[], timeZone: string): boolean {
+  const d = r.findIndex((c) => {
+    if (c instanceof Date) return true;
+    if (typeof c !== "string" || c.trim() === "") return false;
+    try {
+      parseStatementDate(c, detectDateOrder([c]), timeZone);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  return (
+    d >= 0 &&
+    r.some((c, j) => {
+      if (j === d) return false;
+      try {
+        return parseAmount(c, detectDecimal([c])) !== null;
+      } catch {
+        return false;
+      }
+    })
+  );
+}
+
+/**
+ * With no header recognised, the row offered for choosing the columns by hand is the one above the first row that
+ * looks like a transaction, so account details above the table are not offered instead. A file that starts with
+ * transactions offers its first row, and one with no such row in the first 80 its first row with two columns.
+ */
+function guessHeaderRow(rows: Cell[][], timeZone: string): number {
+  const hasColumns = (r: Cell[]) => r.filter((c) => !isBlank(c)).length >= 2;
+  const data = rows.slice(0, 80).findIndex((r) => hasColumns(r) && looksLikeTransaction(r, timeZone));
+  for (let i = data - 1; i >= 0; i--) if (hasColumns(rows[i]!)) return i;
+  return data >= 0 ? data : rows.findIndex(hasColumns);
 }
 
 const DEBIT_WORDS = /^(t|d|db|dr|dbit|debit|terheles|kiadas|kimeno|soll|s|out|outgoing|withdrawal|-)$/;
@@ -115,7 +169,7 @@ export function rowExternalId(parts: (string | number)[], seen: Map<string, numb
   return n === 0 ? `stmt:${h}` : `stmt:${h}:${n}`;
 }
 
-function isTransactionRow(r: Cell[], idx: Partial<Record<StatementRole, number>>, timeZone: string): boolean {
+function isTransactionRow(r: Cell[], idx: ColumnIndex, timeZone: string): boolean {
   const d = r[idx.date ?? idx.valueDate ?? -1];
   if (d == null || String(d).trim() === "") return false;
   try {
@@ -137,11 +191,10 @@ export function parseTabular(rows: Cell[][], opts: TabularOptions): TabularResul
   const chosen = Object.values(opts.mapping ?? {}).filter((c): c is string => Boolean(c));
   const label = (c: Cell, i: number) => (c == null || String(c).trim() === "" ? `Oszlop ${i + 1}` : String(c).trim());
   // With columns chosen by hand, the header is the first row that has all of them.
-  let headerIdx = chosen.length ? rows.findIndex((r) => chosen.every((c) => r.map(label).includes(c))) : findHeaderRow(rows);
+  let headerIdx = chosen.length ? rows.findIndex((r) => chosen.every((c) => r.map(label).includes(c))) : findHeaderRow(rows, opts.timeZone);
   if (chosen.length && headerIdx < 0) throw badRequest(`No row has all the chosen columns (${chosen.join(", ")})`);
-  const detected = headerIdx >= 0;
-  // Nothing recognisable: offer the first row with content as the header, so the columns can be chosen by hand.
-  if (!detected) headerIdx = rows.findIndex((r) => r.filter((c) => c != null && String(c).trim() !== "").length >= 2);
+  // Nothing recognisable: offer a row as the header, so the columns can be chosen by hand.
+  if (headerIdx < 0) headerIdx = guessHeaderRow(rows, opts.timeZone);
   if (headerIdx < 0) throw badRequest("The file has no rows with at least two columns");
   const columns = rows[headerIdx]!.map(label);
   const mapping = detectMapping(columns, opts.mapping);
@@ -155,7 +208,7 @@ export function parseTabular(rows: Cell[][], opts: TabularOptions): TabularResul
       errors: ["No date and amount (or debit and credit) column was recognised; choose them by hand."],
     };
   }
-  const idx = Object.fromEntries(Object.entries(mapping).map(([r, c]) => [r, columns.indexOf(c!)])) as Partial<Record<StatementRole, number>>;
+  const idx = columnIndex(mapping, columns);
   // A file without a header offers its first row as the column names; when that row is chosen, it is still a transaction.
   // A real header never reads as a date and an amount.
   const headerIsData = chosen.length > 0 && isTransactionRow(rows[headerIdx]!, idx, opts.timeZone);
