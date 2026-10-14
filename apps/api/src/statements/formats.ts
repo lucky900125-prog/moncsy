@@ -113,10 +113,12 @@ export function parseOfx(text: string, timeZone: string): FormatResult {
   const tag = (block: string, name: string) => block.match(new RegExp(`<${name}>([^<\\r\\n]*)`, "i"))?.[1]?.trim() ?? "";
   // A file can hold several statements (accounts, cards), each with its own CURDEF before its transactions.
   const curdefs = [...text.matchAll(/<CURDEF>\s*([A-Za-z]{3})/gi)].map((m) => ({ at: m.index, ccy: m[1]!.toUpperCase() }));
-  const blocks = [...text.matchAll(/<STMTTRN>([\s\S]*?)(?=<\/STMTTRN>|<STMTTRN>|<\/BANKTRANLIST>)/gi)].map((m) => ({
-    body: m[1]!,
-    currency: curdefs.filter((c) => c.at < m.index).at(-1)?.ccy ?? null,
-  }));
+  // Both lists are in file order, so one pass finds each transaction's CURDEF; a search per transaction was quadratic.
+  let last = -1;
+  const blocks = [...text.matchAll(/<STMTTRN>([\s\S]*?)(?=<\/STMTTRN>|<STMTTRN>|<\/BANKTRANLIST>)/gi)].map((m) => {
+    while (last + 1 < curdefs.length && curdefs[last + 1]!.at < m.index) last++;
+    return { body: m[1]!, currency: last >= 0 ? curdefs[last]!.ccy : null };
+  });
   if (!blocks.length) throw badRequest("No <STMTTRN> transactions found in the OFX file");
   const res: FormatResult = { currency: curdefs[0]?.ccy ?? null, transactions: [], ignored: 0, errors: [] };
   const seen = new Map<string, number>();
