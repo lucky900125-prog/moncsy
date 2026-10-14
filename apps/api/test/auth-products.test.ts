@@ -79,6 +79,29 @@ describe("products from receipt lines", () => {
     expect(storeName("Bors GasztroBár")).toBe("Bors GasztroBár");
   });
 
+  it("keeps a company's name up to the words about the company, and counts the spellings of one store as one", () => {
+    expect(storeName("Penny Market Kft.")).toBe("Penny Market");
+    expect(storeName("PENNY MARKET")).toBe("Penny Market");
+    expect(storeName("Media Markt Saturn Holding Magyarország Kft.")).toBe("Media Markt Saturn");
+    expect(storeName("Media Fotó Kft.")).toBe("Media Fotó");
+    expect(storeName("OTP BANK Nyrt.")).toBe("OTP Bank");
+    const milk = (price: number) => [{ name: "Tej", quantity: 1, unitPrice: price, total: price, product: "tej", brand: null }];
+    const stats = buildProductStats([
+      tx("1", "Penny Market Kft.", "2026-10-01T10:00:00Z", milk(400)),
+      tx("2", "PENNY MARKET", "2026-10-02T10:00:00Z", milk(410)),
+      tx("3", "Spar", "2026-10-03T10:00:00Z", milk(450)),
+      tx("4", "spar", "2026-10-04T10:00:00Z", milk(460)),
+      tx("5", "Müller", "2026-10-05T10:00:00Z", milk(470)),
+      tx("6", "MULLER", "2026-10-06T10:00:00Z", milk(480)),
+    ]);
+    expect(stats[0]!.stores.map((s) => [s.store, s.purchases])).toEqual([
+      ["Penny Market", 2],
+      ["Spar", 2],
+      ["Müller", 2],
+    ]);
+    expect(new Set(stats[0]!.history.map((h) => h.store))).toEqual(new Set(["Penny Market", "Spar", "Müller"]));
+  });
+
   it("compares the same product across stores per litre, and ranks the stores", () => {
     const milk = (size: number, unit: "l" | "ml", price: number) => ({
       name: `Mizo tej ${size}${unit}`, quantity: 1, unitPrice: price, total: price, product: "tej", brand: "Mizo", packSize: size, packUnit: unit,
