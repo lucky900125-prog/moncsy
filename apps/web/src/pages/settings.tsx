@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Download, Upload, RefreshCw, Landmark, FileUp, Server, RotateCcw } from "lucide-react";
+import { Download, Upload, RefreshCw, Landmark, FileUp, Server, RotateCcw, Eye, EyeOff, KeyRound } from "lucide-react";
 import { toast } from "sonner";
 import type { RevolutStatus } from "@et/shared";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,7 +11,7 @@ import { Segmented } from "@/components/ui/segmented";
 import { useApp } from "@/store/app";
 import { getTheme, setTheme, type Theme } from "@/lib/theme";
 import { resetDemo } from "@/lib/demo";
-import type { ImportResult } from "@/lib/backend";
+import { getApiToken, getApiUrlSetting, saveConnection, type ImportResult } from "@/lib/backend";
 import { shortDate } from "@/lib/format";
 
 function reportImport(r: ImportResult) {
@@ -25,9 +25,9 @@ function reportImport(r: ImportResult) {
 export function SettingsPage() {
   const { backend, refresh } = useApp();
   const [theme, setThemeState] = useState<Theme>(getTheme);
-  const [apiUrl, setApiUrl] = useState(() => {
-    try { return localStorage.getItem("moncsy-api") ?? ""; } catch { return ""; }
-  });
+  const [apiUrl, setApiUrl] = useState(getApiUrlSetting);
+  const [token, setToken] = useState(getApiToken);
+  const [showToken, setShowToken] = useState(false);
   const [revolut, setRevolut] = useState<RevolutStatus | null>(null);
   const [revolutError, setRevolutError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -146,21 +146,50 @@ export function SettingsPage() {
           {backend?.mode === "demo" && (
             <p className="text-sm text-muted-foreground">Az API nem válaszolt, ezért a böngészőben tárolt demó adatokkal fut. Az import, export és a Revolut az API-t igényli.</p>
           )}
-          <div className="grid gap-1.5">
-            <Label htmlFor="api">API cím (üresen: ugyanaz a domain)</Label>
-            <div className="flex gap-2">
-              <Input id="api" value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="https://moncsy.example.com" />
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  try { localStorage.setItem("moncsy-api", apiUrl.trim()); } catch { /* blocked storage */ }
-                  location.reload();
-                }}
-              >
-                Mentés
-              </Button>
+          <form
+            className="flex flex-col gap-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              try {
+                saveConnection(apiUrl, token);
+                location.reload();
+              } catch (err) {
+                toast.error("Nem sikerült menteni", { description: `A böngésző tiltja a helyi tárolást: ${(err as Error).message}` });
+              }
+            }}
+          >
+            <div className="grid gap-1.5">
+              <Label htmlFor="api">API cím (üresen: ugyanaz a domain)</Label>
+              <Input id="api" value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="https://moncsy.example.com" inputMode="url" autoComplete="url" />
             </div>
-          </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="token" className="flex items-center gap-1.5"><KeyRound className="size-3.5" /> API token</Label>
+              <div className="relative">
+                <Input
+                  id="token"
+                  type={showToken ? "text" : "password"}
+                  value={token}
+                  onChange={(e) => setToken(e.target.value)}
+                  placeholder="A szerveren beállított token"
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="pr-10 font-mono"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground"
+                  onClick={() => setShowToken((v) => !v)}
+                  aria-label={showToken ? "Token elrejtése" : "Token megjelenítése"}
+                >
+                  {showToken ? <EyeOff /> : <Eye />}
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">Minden kéréshez csatolva megy (Authorization: Bearer). Csak ebben a böngészőben tárolódik.</p>
+            </div>
+            <Button type="submit" variant="secondary" className="self-start">Mentés és újratöltés</Button>
+          </form>
           {backend?.mode === "demo" && (
             <Button variant="ghost" size="sm" className="self-start text-muted-foreground" onClick={() => { resetDemo(); refresh(); toast("Demó adatok visszaállítva"); }}>
               <RotateCcw /> Demó adatok visszaállítása

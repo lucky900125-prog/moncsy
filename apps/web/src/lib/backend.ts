@@ -38,21 +38,17 @@ export class ApiError extends Error {
 const API_KEY = "moncsy-api";
 const TOKEN_KEY = "moncsy-api-token";
 
-export function getApiBase() {
+function readSetting(key: string) {
   try {
-    return (localStorage.getItem(API_KEY) || "").replace(/\/$/, "") + "/api";
+    return localStorage.getItem(key) ?? "";
   } catch {
-    return "/api";
+    return ""; // blocked storage behaves as "not set"
   }
 }
 
-export function getApiToken() {
-  try {
-    return localStorage.getItem(TOKEN_KEY) ?? "";
-  } catch {
-    return "";
-  }
-}
+export const getApiBase = () => readSetting(API_KEY).replace(/\/$/, "") + "/api";
+export const getApiUrlSetting = () => readSetting(API_KEY);
+export const getApiToken = () => readSetting(TOKEN_KEY);
 
 /** Saves the connection; the caller reloads the page so the backend is detected again. */
 export function saveConnection(url: string, token: string) {
@@ -67,17 +63,23 @@ function withAuth(init: RequestInit = {}): RequestInit {
   return { ...init, headers: { ...(init.headers as Record<string, string> | undefined), Authorization: `Bearer ${token}` } };
 }
 
+async function errorFrom(res: Response): Promise<ApiError> {
+  if (res.status === 401) {
+    return new ApiError(401, getApiToken()
+      ? "Az API elutasította a tokent. Ellenőrizd a Beállítások / Kapcsolat alatt."
+      : "Az API tokent kér. Add meg a Beállítások / Kapcsolat alatt.");
+  }
+  let msg = `${res.status} ${res.statusText}`;
+  try {
+    const body = await res.json();
+    msg = body.message || body.error || msg;
+  } catch { /* body was not JSON; keep status text */ }
+  return new ApiError(res.status, msg);
+}
+
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(getApiBase() + path, withAuth(init));
-  if (!res.ok) {
-    let msg = `${res.status} ${res.statusText}`;
-    try {
-      const body = await res.json();
-      msg = body.message || body.error || msg;
-    } catch { /* body was not JSON; keep status text */ }
-    if (res.status === 401) msg = "Az API tokent kér, vagy a megadott token hibás. Add meg a Beállítások / Kapcsolat alatt.";
-    throw new ApiError(res.status, msg);
-  }
+  if (!res.ok) throw await errorFrom(res);
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
@@ -123,7 +125,7 @@ export const apiBackend: Backend = {
   importStatement: (transactions) => call("/statements/import", json("POST", { transactions })),
   exportFile: async (format, range) => {
     const res = await fetch(getApiBase() + `/export${qs({ format, ...range })}`, withAuth());
-    if (!res.ok) throw new ApiError(res.status, `Export sikertelen: ${res.status} ${res.statusText}`);
+    if (!res.ok) throw await errorFrom(res);
     return res.blob();
   },
 };
@@ -133,9 +135,10 @@ export async function detectBackend(): Promise<Backend> {
   try {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), 1500);
-    const res = await fetch(getApiBase() + "/health", { signal: ctrl.signal });
+    const res = await fetch(getApiBase() + "/health", withAuth({ signal: ctrl.signal }));
     clearTimeout(t);
-    if (res.ok && (res.headers.get("content-type") ?? "").includes("json")) return apiBackend;
+    // 401 still means the API is there: stay on it so a missing or wrong token shows up as an error, not as demo data.
+    if (res.status === 401 || (res.ok && (res.headers.get("content-type") ?? "").includes("json"))) return apiBackend;
   } catch { /* unreachable: fall through to demo, surfaced in the UI as "Demó mód" */ }
   return demoBackend;
 }

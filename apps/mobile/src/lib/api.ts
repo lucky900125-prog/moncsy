@@ -1,4 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as SecureStore from "expo-secure-store";
+import { Platform } from "react-native";
 import type { AnalyzeRequest, AnalyzeResponse, Category, ReceiptScanResult, Transaction } from "@et/shared";
 
 const KEY = "moncsy-api";
@@ -17,16 +19,43 @@ export async function setApiUrl(url: string) {
   await AsyncStorage.setItem(KEY, base);
 }
 
+// The token is a credential: on iOS/Android it goes to the Keychain/Keystore. SecureStore has no web implementation,
+// so the Expo web build keeps it in AsyncStorage (browser localStorage), like the web PWA does.
+const TOKEN_KEY = "moncsy-token";
+const tokenStore = Platform.OS === "web"
+  ? { get: () => AsyncStorage.getItem(TOKEN_KEY), set: (v: string) => AsyncStorage.setItem(TOKEN_KEY, v), clear: () => AsyncStorage.removeItem(TOKEN_KEY) }
+  : { get: () => SecureStore.getItemAsync(TOKEN_KEY), set: (v: string) => SecureStore.setItemAsync(TOKEN_KEY, v), clear: () => SecureStore.deleteItemAsync(TOKEN_KEY) };
+
+let token: string | null = null;
+
+export async function getApiToken() {
+  if (token === null) token = (await tokenStore.get()) ?? "";
+  return token;
+}
+
+export async function setApiToken(value: string) {
+  const v = value.trim();
+  if (v) await tokenStore.set(v);
+  else await tokenStore.clear();
+  token = v;
+}
+
 export class ApiError extends Error {}
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const root = await getApiUrl();
   if (!root) throw new ApiError("Nincs beállítva az API címe. Add meg a Beállításokban.");
+  const auth = await getApiToken();
+  const headers = new Headers(init?.headers);
+  if (auth) headers.set("Authorization", `Bearer ${auth}`);
   let res: Response;
   try {
-    res = await fetch(`${root}/api${path}`, init);
+    res = await fetch(`${root}/api${path}`, { ...init, headers });
   } catch (e) {
     throw new ApiError(`Az API nem érhető el (${root}): ${(e as Error).message}`);
+  }
+  if (res.status === 401) {
+    throw new ApiError(auth ? "Az API elutasította a tokent. Ellenőrizd a Beállításokban." : "Az API tokent kér. Add meg a Beállításokban.");
   }
   if (!res.ok) {
     let msg = `${res.status}`;
