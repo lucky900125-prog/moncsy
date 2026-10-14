@@ -563,7 +563,9 @@ export class BackupScheduler {
     if (remote > base) {
       this.stop(
         `${this.cfg.repo}/${this.cfg.path} holds generation ${remote}, but this database came from generation ${base}: ` +
-          "another instance wrote a newer copy. Not overwriting it; restart the service to load that copy.",
+          "another instance wrote a newer copy. Not overwriting it. " +
+          `The changes made on this instance since ${this.status.lastBackupAt ?? "the start"} are not in that copy: ` +
+          "save them with GET /api/export before restarting, then restart the service to load it.",
       );
       return false;
     }

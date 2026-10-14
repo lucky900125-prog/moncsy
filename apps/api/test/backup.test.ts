@@ -139,6 +139,10 @@ describe("backup and restore through the API", () => {
       pending: true,
       lastError: expect.stringMatching(/holds generation 2, but this database came from generation 1/),
     });
+    // The write that set off the check got its 2xx, but it is not in the newer copy: the reason says so, and what to do.
+    expect(oldApp.deps.backup!.getStatus().lastError).toMatch(
+      /another instance wrote a newer copy\. Not overwriting it\. The changes made on this instance since 20\d\d-\d\d-\d\dT[\d:.]+Z are not in that copy: save them with GET \/api\/export before restarting, then restart the service to load it\.$/,
+    );
     await oldApp.close(); // closing does not upload either
     expect(gh.state.puts).toBe(2);
     expect(decryptBlob(gh.state.content!, key).data.includes(Buffer.from("Új példány"))).toBe(true);
