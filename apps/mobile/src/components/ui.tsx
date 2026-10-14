@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, View, useColorScheme, type PressableProps } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import type { Category } from "@et/shared";
+import { resolveCategoryIcon, type Category, type CategoryIconName } from "@et/shared";
 import {
   Baby, BookOpen, CircleEllipsis, Beer, Briefcase, Bus, Car, Circle, Coffee, Dumbbell, Film, Fuel, Gamepad2, Gift, GraduationCap, HeartPulse,
   Home, Landmark, Music, Package, PawPrint, Pill, Plane, Repeat, Shirt, ShoppingBag, ShoppingCart, Smartphone, Sparkles,
@@ -74,9 +74,10 @@ export function ErrorCard({ message, onRetry }: { message: string; onRetry?: () 
   );
 }
 
-const ICONS: Record<string, LucideIcon> = {
-  "shopping-cart": ShoppingCart, "shopping-bag": ShoppingBag, "utensils-crossed": UtensilsCrossed, utensils: UtensilsCrossed,
-  coffee: Coffee, bus: Bus, train: Train, car: Car, fuel: Fuel, home: Home, house: Home, zap: Zap, wifi: Wifi, film: Film,
+/** Every CATEGORY_ICON_NAMES entry must have a component here; the Record type makes a missing one a compile error. */
+const ICONS: Record<CategoryIconName, LucideIcon> = {
+  "shopping-cart": ShoppingCart, "shopping-bag": ShoppingBag, "utensils-crossed": UtensilsCrossed,
+  coffee: Coffee, bus: Bus, train: Train, car: Car, fuel: Fuel, home: Home, zap: Zap, wifi: Wifi, film: Film,
   "gamepad-2": Gamepad2, music: Music, "heart-pulse": HeartPulse, pill: Pill, shirt: Shirt, plane: Plane, repeat: Repeat,
   package: Package, wallet: Wallet, gift: Gift, "graduation-cap": GraduationCap, "paw-print": PawPrint, baby: Baby,
   dumbbell: Dumbbell, smartphone: Smartphone, wrench: Wrench, briefcase: Briefcase, landmark: Landmark, sparkles: Sparkles,
@@ -84,7 +85,8 @@ const ICONS: Record<string, LucideIcon> = {
 };
 
 export function CategoryBadge({ category, size = 36 }: { category?: Category | null; size?: number }) {
-  const Icon = ICONS[category?.icon ?? "package"] ?? Circle;
+  const resolved = resolveCategoryIcon(category?.icon ?? "package");
+  const Icon = resolved ? ICONS[resolved] : Circle;
   const color = category?.color ?? "#94a3a8";
   return (
     <View style={{ width: size, height: size, borderRadius: size * 0.32, backgroundColor: `${color}29`, alignItems: "center", justifyContent: "center" }}>

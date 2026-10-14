@@ -40,6 +40,25 @@ export const DEFAULT_CATEGORIES = [
 
 export type DefaultCategoryId = (typeof DEFAULT_CATEGORIES)[number]["id"];
 
+/** Icons a category may use (lucide kebab-case names, stored in Category.icon). Web and mobile each map these to their lucide package. */
+export const CATEGORY_ICON_NAMES = [
+  "shopping-cart", "shopping-bag", "utensils-crossed", "coffee", "bus", "train", "car", "fuel", "home", "zap", "wifi", "film",
+  "gamepad-2", "music", "heart-pulse", "pill", "shirt", "plane", "repeat", "package", "wallet", "gift", "graduation-cap",
+  "paw-print", "baby", "dumbbell", "smartphone", "wrench", "briefcase", "landmark", "sparkles", "book-open", "beer", "circle-ellipsis",
+] as const;
+
+export type CategoryIconName = (typeof CATEGORY_ICON_NAMES)[number];
+
+/** Icon names older databases may still hold, mapped onto the current set. */
+export const CATEGORY_ICON_ALIASES: Readonly<Record<string, CategoryIconName>> = { utensils: "utensils-crossed", house: "home" };
+
+/** Resolves a stored icon name to one of CATEGORY_ICON_NAMES, or null when it is unknown. */
+export function resolveCategoryIcon(name: string | null | undefined): CategoryIconName | null {
+  if (!name) return null;
+  const n = CATEGORY_ICON_ALIASES[name] ?? name;
+  return (CATEGORY_ICON_NAMES as readonly string[]).includes(n) ? (n as CategoryIconName) : null;
+}
+
 export interface ReceiptItem {
   /** the line as printed on the receipt */
   name: string;
