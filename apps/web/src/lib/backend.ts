@@ -149,6 +149,7 @@ export async function detectBackend(onSlow?: () => void): Promise<Detection> {
   const slow = configured && onSlow ? setTimeout(onSlow, 1500) : undefined;
   try {
     const res = await fetch(getApiBase() + "/health", withAuth({ signal: ctrl.signal }));
+    // moncsy keeps /health public, so this is for a proxy or another server at that address that asks for auth.
     if (res.status === 401) return { backend: apiBackend, error: (await errorFrom(res)).message };
     if (res.ok && (res.headers.get("content-type") ?? "").includes("json")) {
       // /health is public; it only lists "ai" when the request carried the right token.

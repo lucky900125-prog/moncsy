@@ -60,6 +60,12 @@ export function DetailsTab() {
   );
   const filtered = useMemo(() => (store ? selection.filter((p) => p.stores.some((s) => s.store === store)) : selection), [selection, store]);
   const ranking = useMemo(() => rankStores(selection), [selection]);
+  // One sum per currency, HUF first: adding EUR to HUF would be wrong, and leaving it out would hide it.
+  const totals = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const p of filtered) m.set(p.currency, (m.get(p.currency) ?? 0) + p.spent);
+    return [...m].sort(([a], [b]) => (a === "HUF" ? -1 : b === "HUF" ? 1 : a.localeCompare(b)));
+  }, [filtered]);
   const compared = ranking.length ? Math.max(...ranking.map((s) => s.compared)) : 0;
   const brandName = brand === ALL_BRANDS ? null : brand;
 
@@ -156,7 +162,7 @@ export function DetailsTab() {
       <div className="grid gap-4 lg:grid-cols-[1fr_20rem]">
         <div className="flex flex-col gap-2">
           <p className="px-1 text-xs text-muted-foreground">
-            {filtered.length} termék · {money(filtered.reduce((s, p) => s + (p.currency === "HUF" ? p.spent : 0), 0))}
+            {filtered.length} termék{totals.map(([c, v]) => ` · ${money(v, c)}`).join("")}
           </p>
           {filtered.length === 0 && (
             <Card className="p-5 text-sm text-muted-foreground">

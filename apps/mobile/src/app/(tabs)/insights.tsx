@@ -86,7 +86,7 @@ export default function Insights() {
           </Card>
           {res.insights.map((i, n) => (
             <Card key={n} className="gap-1">
-              <Text className={`font-medium ${i.severity === "warning" ? "text-danger dark:text-danger-dark" : i.severity === "positive" ? "text-positive dark:text-positive-dark" : "text-fg dark:text-fg-dark"}`}>{i.title}</Text>
+              <Text className={`font-medium ${i.severity === "warning" ? "text-amber-600 dark:text-amber-300" : i.severity === "positive" ? "text-positive dark:text-positive-dark" : "text-fg dark:text-fg-dark"}`}>{i.title}</Text>
               <Text className="text-sm text-muted-fg dark:text-muted-fg-dark">{i.detail}</Text>
             </Card>
           ))}

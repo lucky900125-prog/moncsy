@@ -211,6 +211,11 @@ export function SettingsPage() {
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">Minden kéréshez csatolva megy (Authorization: Bearer). Csak ebben a böngészőben tárolódik.</p>
+              {SHARED_ORIGIN && (
+                <p className="text-xs text-amber-700 dark:text-amber-300">
+                  A {location.host} címet a fiók összes GitHub Pages oldala megosztja, ezek is olvashatják a tokent. Olyan tokent adj meg, amit le tudsz cserélni. Saját domainnel ez a kockázat megszűnik.
+                </p>
+              )}
             </div>
             <Button type="submit" variant="secondary" className="self-start">Mentés és újratöltés</Button>
           </form>
@@ -224,6 +229,9 @@ export function SettingsPage() {
     </div>
   );
 }
+
+// Browser storage is per origin, and every Pages site of a GitHub account is served from <account>.github.io.
+const SHARED_ORIGIN = location.hostname.endsWith(".github.io");
 
 const backupTone = {
   ok: { icon: CloudCheck, cls: "text-positive" },

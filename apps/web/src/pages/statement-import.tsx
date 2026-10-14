@@ -237,6 +237,9 @@ export function StatementImportPage() {
                     <span>Beolvasás…</span>
                   )}
                 </div>
+                {preview && backend?.mode === "demo" && (
+                  <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">Demó mód: ez egy beépített minta kivonat, nem a feltöltött fájl tartalma.</p>
+                )}
               </div>
               <Button variant="outline" size="sm" onClick={reset} disabled={phase === "importing"}><RotateCcw /> Másik fájl</Button>
             </CardContent>
@@ -375,7 +378,7 @@ function RolePicker({ label, hint, value, columns, onChange, disabled }: { label
     <div className="grid gap-1">
       <span className="text-xs text-muted-foreground">{label}{hint ? <span className="opacity-70"> · {hint}</span> : null}</span>
       <Select value={value || NONE} onValueChange={onChange} disabled={disabled}>
-        <SelectTrigger className={cn("h-9", !value && "text-muted-foreground")}><SelectValue /></SelectTrigger>
+        <SelectTrigger aria-label={label} className={cn("h-9", !value && "text-muted-foreground")}><SelectValue /></SelectTrigger>
         <SelectContent>
           <SelectItem value={NONE}>Nincs ilyen oszlop</SelectItem>
           {[...new Set(columns.filter(Boolean))].map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
