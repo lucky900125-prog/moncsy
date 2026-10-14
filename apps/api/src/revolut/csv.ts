@@ -6,7 +6,7 @@ import { badRequest } from "../errors.js";
 import { decodeText, detectDelimiter } from "../io/text.js";
 import type { Repository } from "../repository.js";
 import { categorize } from "./categorize.js";
-import { cellValue, loadWorkbook } from "../io/xlsx.js";
+import { busiestSheet, cellValue, readWorkbook, type SheetCell } from "../io/xlsx.js";
 import { META_CSV_ACCOUNTS, META_LAST_SYNC, type RevolutProvider } from "./types.js";
 
 /** One row of the Revolut app's "Account statement" export (Excel or CSV). */
@@ -157,25 +157,27 @@ export function parseStatementCsv(text: string, delimiter = detectDelimiter(text
   return normalizeRecords(records, header);
 }
 
-export async function parseStatementXlsx(buf: Buffer): Promise<{ rows: StatementRow[]; errors: string[] }> {
-  const wb = await loadWorkbook(buf, "Not a readable XLSX file");
-  const ws = wb.worksheets[0];
-  if (!ws) throw badRequest("The XLSX file has no worksheets");
-  const header: string[] = [];
-  ws.getRow(1).eachCell({ includeEmpty: true }, (cell, c) => (header[c] = String(cellValue(cell.value)).trim()));
+/** The rows of the statement's sheet, first row the header. */
+export function parseStatementSheet(rows: SheetCell[][]): { rows: StatementRow[]; errors: string[] } {
+  const header = (rows[0] ?? []).map((c) => String(cellValue(c)).trim());
   const records: Record<string, unknown>[] = [];
-  ws.eachRow((row, n) => {
-    if (n === 1) return;
+  for (const row of rows.slice(1)) {
     const rec: Record<string, unknown> = {};
     header.forEach((h, c) => {
       if (!h) return;
-      const v = row.getCell(c).value;
-      // Keep real Date objects (revolutDate handles them); unwrap formula, rich-text and hyperlink cells.
+      const v = row[c] ?? null;
+      // Keep real Date objects (revolutDate handles them).
       rec[h] = v instanceof Date ? v : cellValue(v);
     });
     if (Object.values(rec).some((v) => v !== null && v !== undefined && v !== "")) records.push(rec);
-  });
+  }
   return normalizeRecords(records, header.filter(Boolean));
+}
+
+export async function parseStatementXlsx(buf: Buffer): Promise<{ rows: StatementRow[]; errors: string[] }> {
+  const sheet = busiestSheet(await readWorkbook(buf, "Not a readable XLSX file"));
+  if (!sheet) throw badRequest("The XLSX file has no worksheets");
+  return parseStatementSheet(sheet.rows);
 }
 
 /** externalId = hash of date + amount + description (an occurrence suffix separates identical rows in one file). */

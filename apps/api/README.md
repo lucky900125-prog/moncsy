@@ -106,11 +106,12 @@ For hosts whose disk is wiped on restart (Render's free plan), set `BACKUP_GITHU
 
 Conventions:
 
-- **Errors.** Every error returns `{ error: string, details?: unknown }`. The status codes are 400 (validation), 401 (missing or wrong token), 404, 409 (conflict, built-in category), 413 (upload > 10 MB), 415 (wrong file type), 422 (product analysis without receipt lines), 429 (too many wrong tokens), 501 (open-banking sync), 502 (AI provider or Revolut upstream failure, or invalid AI JSON) and 503 (Revolut business-api without a token).
+- **Errors.** Every error returns `{ error: string, details?: unknown }`. The status codes are 400 (validation), 401 (missing or wrong token), 404, 409 (conflict, built-in category), 413 (upload > 10 MB, or an XLSX file too large to read, see below), 415 (wrong file type), 422 (product analysis without receipt lines), 429 (too many wrong tokens), 501 (open-banking sync), 502 (AI provider or Revolut upstream failure, or invalid AI JSON) and 503 (Revolut business-api without a token, or XLSX reading switched off by `NODE_OPTIONS`, see below).
 - **Dates.** Dates are stored as full ISO 8601 UTC strings. Any parseable date is accepted on input, and `2026-10-12` becomes `2026-10-12T00:00:00.000Z`. A date-only `to` covers the whole day.
 - **`GET /summary`.** Amounts in different currencies are never added together. The summary covers `currency`, or else the most common currency in the range, or else `DEFAULT_CURRENCY`. `income` and `expense` are non-negative magnitudes. `byCategory[].total` is the signed sum (negative = spending), largest spend first. An income category has a positive total.
 - **Notes.** An empty `note` is stored as no note.
 - **Duplicate `externalId`.** Creating a transaction with an existing `externalId` returns 409.
+- **Uploaded XLSX** (`/statements/parse`, `/revolut/import-statement`, `/import`). A few kilobytes of workbook XML can describe the whole sheet (a merge, a data validation, a defined name or a column range up to cell XFD1048576), and ExcelJS builds an object for every cell it covers, so such a file runs any server out of memory. Before anything is loaded, the archive is unpacked and counted: more than 20 MB unpacked, more than 100 000 merged cells, data validation or defined names over more than 200 000 cells (a whole column is 1 048 576) each get 413, and a column past XFD gets 400. The workbook is then read in a worker thread (`io/xlsx-worker.ts`) with a 96 MB heap, one file at a time, which holds about 30 000 rows of a five-column statement or 20 000 rows of an export; Render's free plan restarts the service at 512 MB, and the main thread alone can take 250-330 MB: a file that needs more gets 413, one that takes more than 30 s gets 413 too, and the server keeps running. A sheet with a value beyond row 100 000 or column 200 gets 400. A process-wide `--max-old-space-size` (for example in `NODE_OPTIONS`) overrides the worker's limit, so while one larger than twice that limit is set, every XLSX upload gets 503 and says why.
 
 ## AI providers (`src/ai/`)
 
@@ -151,7 +152,7 @@ The model answers in Hungarian unless the question is in another language.
 
 `POST /statements/parse` reads a statement from any bank and returns a preview; `POST /statements/import` saves the rows the user confirmed. The format is detected from the content, not the file name:
 
-- **CSV / XLSX.** The header row is searched for in the first 40 rows, and columns are matched by Hungarian, English and German names (accents and case ignored) to roles such as `date`, `amount` or `debit` + `credit`, `currency`, `counterparty`, `description`. The decimal separator and the day/month order are detected per column. CSV may be UTF-8, UTF-16 with a byte order mark (Excel's "Unicode text") or Windows-1250, with `;`, `,`, tab or `|` delimiters. When the date or the amount cannot be found, the preview lists the columns so the client can send a `mapping`. A Revolut export is routed to the Revolut parser.
+- **CSV / XLSX.** The header row is searched for in the first 40 rows, and columns are matched by Hungarian, English and German names (accents and case ignored) to roles such as `date`, `amount` or `debit` + `credit`, `currency`, `counterparty`, `description`. The decimal separator and the day/month order are detected per column. CSV may be UTF-8, UTF-16 with a byte order mark (Excel's "Unicode text") or Windows-1250, with `;`, `,`, tab or `|` delimiters. When the date or the amount cannot be found, the preview lists the columns so the client can send a `mapping`. A Revolut export is routed to the Revolut parser. From an XLSX file the sheet with the most filled rows is read, and a formula cell counts as its result (a number stays a number, a date a date).
 - **CAMT.052/053/054** (ISO 20022 XML), **OFX** and **MT940** are read by their structure.
 - **PDF** goes to the AI provider's vision call, so it needs a real provider.
 - **Old `.xls`** and XML that is not a bank statement are refused with 415 and a message saying what to do.
@@ -166,7 +167,7 @@ Statement import (`POST /revolut/import-statement`) works in every mode. `REVOLU
 
 In the Revolut app, choose Account → Statement → Excel or CSV, then upload the file.
 
-- **Columns.** The importer reads `Type, Product, Started Date, Completed Date, Description, Amount, Fee, Currency, State, Balance` by header name, case-insensitive. CSV (with or without BOM) and XLSX are both supported. A CSV saved again from a Hungarian Excel, with `;` delimiters, decimal commas and `2026. 10. 01. 8:15` dates, is read too.
+- **Columns.** The importer reads `Type, Product, Started Date, Completed Date, Description, Amount, Fee, Currency, State, Balance` by header name, case-insensitive. CSV (with or without BOM) and XLSX are both supported; from an XLSX file the sheet with the most filled rows is read. A CSV saved again from a Hungarian Excel, with `;` delimiters, decimal commas and `2026. 10. 01. 8:15` dates, is read too.
 - **Which rows are imported.** Only `State = COMPLETED` rows are imported. `EXCHANGE` rows (internal currency conversions) are not imported. Both kinds count as `skipped`.
 - **Amounts.** Amount = `Amount − Fee`. A non-zero fee is mentioned in the note.
 - **Dates.** The date is `Completed Date`, or `Started Date` when there is none. Revolut writes local time without an offset; it is read in `STATEMENT_TZ` and stored as UTC.
@@ -253,7 +254,7 @@ src/
   ai/                 provider interface + anthropic/openai/ollama/mock adapters, strict JSON parsing
   services/           receipt.ts (scan prompt + validation), analyze.ts (aggregate + prompt)
   revolut/            csv.ts, business-api.ts, open-banking.ts, categorize.ts
-  io/                 xlsx.ts, xml.ts, common.ts (shared import pipeline)
+  io/                 xlsx.ts (+ xlsx-worker.ts, the reading thread), xml.ts, zip.ts, text.ts, common.ts (shared import pipeline)
   statements/         any bank's statement: tabular.ts (CSV/XLSX), formats.ts (CAMT/OFX/MT940), pdf.ts, values.ts
   routes/             core.ts, ai.ts, revolut.ts, io.ts, statements.ts, products.ts
 test/                 vitest suites (fastify.inject, in-memory SQLite, mock provider)

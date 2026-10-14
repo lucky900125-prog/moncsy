@@ -1,4 +1,4 @@
-import { crc32, deflateRawSync } from "node:zlib";
+import { crc32, deflateRawSync, inflateRawSync } from "node:zlib";
 import ExcelJS from "exceljs";
 import { describe, expect, it } from "vitest";
 import { MockProvider } from "../src/ai/index.js";
@@ -47,6 +47,47 @@ function zip(entries: [string, Buffer][]): Buffer {
   return Buffer.concat([...locals, dirBytes, end]);
 }
 
+/** The entries of a ZIP archive written by zip() or by ExcelJS (deflated or stored, no ZIP64). */
+function unzip(data: Buffer): [string, Buffer][] {
+  let eocd = data.length - 22;
+  while (data.readUInt32LE(eocd) !== 0x06054b50) eocd--;
+  let p = data.readUInt32LE(eocd + 16);
+  const entries: [string, Buffer][] = [];
+  for (let n = data.readUInt16LE(eocd + 10); n > 0; n--) {
+    const nameLength = data.readUInt16LE(p + 28);
+    const name = data.subarray(p + 46, p + 46 + nameLength).toString();
+    const local = data.readUInt32LE(p + 42);
+    const start = local + 30 + data.readUInt16LE(local + 26) + data.readUInt16LE(local + 28);
+    const body = data.subarray(start, start + data.readUInt32LE(p + 20));
+    entries.push([name, data.readUInt16LE(p + 10) === 8 ? inflateRawSync(body) : Buffer.from(body)]);
+    p += 46 + nameLength + data.readUInt16LE(p + 30) + data.readUInt16LE(p + 32);
+  }
+  return entries;
+}
+
+/** A small, valid statement workbook with one part's XML rewritten. */
+async function rewritten(part: string, edit: (xml: string) => string): Promise<Buffer> {
+  const entries = unzip(await statementWorkbook(() => {}));
+  expect(entries.some(([name]) => name === part), part).toBe(true);
+  return zip(entries.map(([name, data]) => [name, name === part ? Buffer.from(edit(data.toString())) : data]));
+}
+
+const SHEET = "xl/worksheets/sheet1.xml";
+const merge = (ref: string) => (x: string) => x.replace("</sheetData>", `</sheetData><mergeCells count="1"><mergeCell ref="${ref}"/></mergeCells>`);
+const validation = (sqref: string) => (x: string) =>
+  x.replace(/<\/sheetData>(<mergeCells.*<\/mergeCells>)?/, `$&<dataValidations count="1"><dataValidation type="whole" sqref="${sqref}"><formula1>1</formula1></dataValidation></dataValidations>`);
+const name = (ref: string) => (x: string) => x.replace("</sheets>", `</sheets><definedNames><definedName name="n">Kivonat!${ref}</definedName></definedNames>`);
+
+/** Each a few kilobytes, each describing the whole sheet: ExcelJS builds an object per cell for every one of them. */
+const amplifiers: [string, () => Promise<Buffer>, RegExp][] = [
+  ["a merge over the whole sheet", () => rewritten(SHEET, merge("A52:XFD1048576")), /^The XLSX file merges \d+ cells/],
+  ["a column range of 50 million", () => rewritten(SHEET, (x) => x.replace("<sheetData>", '<cols><col min="1" max="50000000" width="10"/></cols><sheetData>')), /describes column 50000000/],
+  ["a validation over the whole sheet", () => rewritten(SHEET, validation("A1:XFD1048576")), /has data validation on \d+ cells/],
+  // More than the reading thread holds beside the data, so refused with a message rather than after running out.
+  ["a validation over a whole column", () => rewritten(SHEET, validation("D1:D1048576")), /has data validation on 1048576 cells/],
+  ["a defined name over the whole sheet", () => rewritten("xl/workbook.xml", name("$A$1:$XFD$1048576")), /defined names cover \d+ cells/],
+];
+
 /** A few kilobytes that unpack to more than the limit, as a worksheet. */
 const bomb = () => zip([["xl/worksheets/sheet1.xml", Buffer.alloc(MAX_XLSX_UNPACKED_BYTES + 1024 * 1024, " ")]]);
 
@@ -92,6 +133,45 @@ describe("uploaded XLSX limits", () => {
     expect(data.length).toBeLessThan(10 * 1024);
     const r = await parse(data);
     expect(r.transactions).toHaveLength(50);
+  });
+
+  it("refuses a small workbook that describes the whole sheet before reading it, on every route", async () => {
+    const app = await testApp();
+    const started = performance.now();
+    for (const [what, build, message] of amplifiers) {
+      const data = await build();
+      expect(data.length, what).toBeLessThan(16 * 1024);
+      for (const url of ["/api/statements/parse", "/api/import", "/api/revolut/import-statement"]) {
+        const res = await app.inject({ method: "POST", url, ...multipart("kivonat.xlsx", "application/octet-stream", data) });
+        expect([413, 400], `${what}, ${url}: ${res.body}`).toContain(res.statusCode);
+        expect(res.json().error, `${what}, ${url}`).toMatch(message);
+      }
+    }
+    // Counted, not loaded: reading any of them takes ExcelJS seconds of CPU before it runs out of memory.
+    expect(performance.now() - started).toBeLessThan(10_000);
+    expect((await app.inject("/api/health")).statusCode).toBe(200);
+    // What legitimate files do is read as usual: a merged header, validation on a table's column, columns formatted
+    // to the sheet's end.
+    const usual = await rewritten(SHEET, (x) =>
+      validation("D2:D10000")(merge("D1:E1")(x)).replace("<sheetData>", '<cols><col min="4" max="16384" width="10" hidden="1"/></cols><sheetData>'),
+    );
+    expect((await parse(usual)).transactions).toHaveLength(50);
+    await app.close();
+  });
+
+  it("reads a workbook in a thread whose memory runs out instead of the server's", async () => {
+    // Every range within its own limit, together more than the reading thread may use.
+    const data = await (async () => {
+      const entries = unzip(await rewritten(SHEET, (x) => validation("A1:A200000")(merge("D60:H20059")(x))));
+      return zip(entries.map(([n, d]) => [n, n === "xl/workbook.xml" ? Buffer.from(name("$B$1:$B$200000")(d.toString())) : d]));
+    })();
+    const app = await testApp();
+    const res = await app.inject({ method: "POST", url: "/api/statements/parse", ...multipart("kivonat.xlsx", "application/octet-stream", data) });
+    expect(res.statusCode, res.body).toBe(413);
+    expect(res.json().error).toMatch(/needs more than \d+ MB to read/);
+    expect((await app.inject("/api/health")).statusCode).toBe(200);
+    expect((await parse(await statementWorkbook(() => {}))).transactions).toHaveLength(50);
+    await app.close();
   });
 
   it("refuses a value beyond the row or column limit instead of building arrays that long", async () => {
