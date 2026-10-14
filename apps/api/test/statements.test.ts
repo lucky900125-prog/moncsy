@@ -448,6 +448,8 @@ DATA:OFXSGML
       ["Példa Kft.", 685000, "income"],
       ["MVM Next", -12990, "utilities"],
     ]);
+    // The mock's balances add up, so its statement carries no warning.
+    expect(r.errors).toEqual([]);
   });
 });
 

@@ -5,8 +5,14 @@ import { parseModelJson } from "../ai/json.js";
 
 const num = z.number().finite();
 
+/**
+ * Far beyond any real receipt. The model's answer is bounded so a misread or planted document cannot make it huge;
+ * the merchant and the product fields stop where a saved transaction stops (schemas.ts), so a scanned line always saves.
+ */
+const MAX_ITEMS = 500;
+
 const modelReceiptSchema = z.object({
-  merchant: z.string().trim().min(1).nullable(),
+  merchant: z.string().trim().min(1).max(200).nullable(),
   date: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}/, "expected YYYY-MM-DD")
@@ -23,23 +29,24 @@ const modelReceiptSchema = z.object({
   items: z
     .array(
       z.object({
-        name: z.string().trim().min(1),
+        name: z.string().trim().min(1).max(200),
         quantity: num.default(1),
         unitPrice: num,
         total: num,
         // The product fields only enrich a line: a value the model got wrong becomes null instead of failing the scan.
-        product: z.string().trim().min(1).nullable().catch(null).transform((s) => s?.toLocaleLowerCase("hu") ?? null),
-        brand: z.string().trim().min(1).nullable().catch(null),
+        product: z.string().trim().min(1).max(120).nullable().catch(null).transform((s) => s?.toLocaleLowerCase("hu") ?? null),
+        brand: z.string().trim().min(1).max(120).nullable().catch(null),
         packSize: num.positive().nullable().catch(null),
         packUnit: z
           .preprocess((v) => (typeof v === "string" ? v.trim().toLowerCase() : v), z.enum(["g", "kg", "ml", "l", "db"]).nullable())
           .catch(null),
       }),
     )
+    .max(MAX_ITEMS)
     .default([]),
-  suggestedCategoryId: z.string().nullable(),
+  suggestedCategoryId: z.string().max(200).nullable(),
   confidence: z.number().min(0).max(1),
-  rawText: z.string().optional(),
+  rawText: z.string().max(20_000).optional(),
 });
 
 export function receiptPrompt(categories: Category[]): string {

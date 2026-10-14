@@ -24,6 +24,8 @@ export class MockProvider implements AIProvider {
     if (prompt.startsWith(STATEMENT_PROMPT_MARKER)) {
       return JSON.stringify({
         currency: "HUF",
+        openingBalance: 152340,
+        closingBalance: 819565,
         transactions: [
           { date: "2026-10-01", amount: -4785, currency: null, counterparty: "SPAR 1234 Budapest", description: "Kártyás vásárlás" },
           { date: "2026-10-03", amount: 685000, currency: null, counterparty: "Példa Kft.", description: "Munkabér október" },
