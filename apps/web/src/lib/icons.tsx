@@ -1,7 +1,7 @@
 import {
   ShoppingCart, UtensilsCrossed, Coffee, Bus, Car, Fuel, Home, Zap, Wifi, Film, Gamepad2, Music,
   HeartPulse, Pill, Shirt, Plane, Repeat, Package, Wallet, Gift, GraduationCap, PawPrint, Baby,
-  Dumbbell, Smartphone, Wrench, Briefcase, Landmark, Sparkles, BookOpen, Beer, Circle, Train, ShoppingBag,
+  Dumbbell, Smartphone, CircleEllipsis, Wrench, Briefcase, Landmark, Sparkles, BookOpen, Beer, Circle, Train, ShoppingBag,
   type LucideIcon,
 } from "lucide-react";
 
@@ -42,6 +42,7 @@ export const CATEGORY_ICONS: Record<string, LucideIcon> = {
   sparkles: Sparkles,
   "book-open": BookOpen,
   beer: Beer,
+  "circle-ellipsis": CircleEllipsis,
 };
 
 export const PICKABLE_ICONS = Object.keys(CATEGORY_ICONS).filter((k) => !["utensils", "house"].includes(k));

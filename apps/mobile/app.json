@@ -1,0 +1,38 @@
+{
+  "expo": {
+    "name": "moncsy",
+    "slug": "moncsy",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#3F5B4A",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro",
+      "output": "single"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "A moncsy a kamerát a blokkok lefotózásához használja.",
+          "photosPermission": "A moncsy a galériából választott blokkfotókat olvassa be."
+        }
+      ]
+    ],
+    "scheme": "moncsy"
+  }
+}
