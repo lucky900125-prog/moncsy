@@ -64,7 +64,14 @@ function TxForm({ existing, draft, fromLink }: { existing?: Transaction; draft: 
   const dateValid = !Number.isNaN(when.getTime());
   const valid = Number.isFinite(parsed) && parsed > 0 && dateValid;
   const currency = draft.currency ?? "HUF";
-  const cats = categories.filter((c) => (kind === "income" ? c.id === "income" || c.isCustom : c.id !== "income"));
+  const catsFor = (k: "expense" | "income") => categories.filter((c) => (k === "income" ? c.id === "income" || c.isCustom : c.id !== "income"));
+  const cats = catsFor(kind);
+
+  // Switching between Kiadás and Bevétel drops a category the other list does not show, so it is not saved unseen.
+  function switchKind(k: "expense" | "income") {
+    setKind(k);
+    if (categoryId && !catsFor(k).some((c) => c.id === categoryId)) setCategoryId(null);
+  }
 
   async function submit() {
     setBusy(true);
@@ -114,7 +121,7 @@ function TxForm({ existing, draft, fromLink }: { existing?: Transaction; draft: 
         <ScrollView contentContainerClassName="gap-5 px-4 pb-10" keyboardShouldPersistTaps="handled">
           <View className="flex-row rounded-xl bg-muted p-1 dark:bg-muted-dark">
             {(["expense", "income"] as const).map((k) => (
-              <Pressable key={k} onPress={() => setKind(k)} className={`h-9 flex-1 items-center justify-center rounded-lg ${kind === k ? "bg-card dark:bg-card-dark" : ""}`}>
+              <Pressable key={k} onPress={() => switchKind(k)} className={`h-9 flex-1 items-center justify-center rounded-lg ${kind === k ? "bg-card dark:bg-card-dark" : ""}`}>
                 <Text className={`text-sm font-medium ${kind === k ? "text-fg dark:text-fg-dark" : "text-muted-fg dark:text-muted-fg-dark"}`}>{k === "expense" ? "Kiadás" : "Bevétel"}</Text>
               </Pressable>
             ))}
