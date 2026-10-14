@@ -59,6 +59,7 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
   const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 2 * 1024 * 1024, trustProxy: (_addr: string, hop: number) => hop < config.trustProxyHops });
   if (opts.backup) {
     deps.backup = new BackupScheduler(db, opts.backup, { info: (m) => app.log.info(m), error: (m) => app.log.error(m) });
+    await deps.backup.init();
   }
   await app.register(cors, {
     origin: config.corsOrigin === "*" ? true : config.corsOrigin.split(",").map((s) => s.trim()),
@@ -83,24 +84,26 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
     async (api) => {
       if (config.apiToken) {
         const failures = new Map<string, { count: number; resetAt: number }>();
+        const unauthorized = { error: "Missing or wrong API token (Authorization: Bearer <API_TOKEN>)" };
         api.addHook("onRequest", async (req, reply) => {
           if (req.method === "OPTIONS" || req.routeOptions.url === "/api/health") return;
+          // The right token always gets through, so nobody can lock the owner out by sending wrong ones from the same
+          // address (behind Render's proxy every client can share one). The limit only answers repeated wrong guesses.
+          if (isAuthorized(config, req)) return;
+          // Only a sent token is a guess; counting bare requests would only add noise.
+          if (!req.headers.authorization) return reply.status(401).send(unauthorized);
           const now = Date.now();
           let f = failures.get(req.ip);
-          if (f && f.resetAt <= now) {
-            failures.delete(req.ip);
-            f = undefined;
+          if (!f || f.resetAt <= now) {
+            f = { count: 0, resetAt: now + AUTH_WINDOW_MS };
+            failures.set(req.ip, f);
           }
-          if (f && f.count >= AUTH_MAX_FAILURES) {
+          f.count++;
+          if (failures.size > 1000) for (const [ip, v] of failures) if (v.resetAt <= now) failures.delete(ip);
+          if (f.count > AUTH_MAX_FAILURES) {
             return reply.status(429).send({ error: "Too many wrong API tokens from this address; try again later" });
           }
-          if (!isAuthorized(config, req)) {
-            // Only a sent token is a guess; counting bare requests would let any crawler lock the owner out.
-            if (req.headers.authorization) {
-              failures.set(req.ip, { count: (f?.count ?? 0) + 1, resetAt: f?.resetAt ?? now + AUTH_WINDOW_MS });
-            }
-            return reply.status(401).send({ error: "Missing or wrong API token (Authorization: Bearer <API_TOKEN>)" });
-          }
+          return reply.status(401).send(unauthorized);
         });
       }
       if (deps.backup) {

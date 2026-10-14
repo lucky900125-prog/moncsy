@@ -38,10 +38,12 @@ The database is created at `DB_PATH` on first run. The default categories are se
 
 For hosts whose disk is wiped on restart (Render's free plan), set `BACKUP_GITHUB_REPO`, `BACKUP_GITHUB_TOKEN` and `BACKUP_KEY`:
 
-- **What is uploaded.** A `VACUUM INTO` snapshot, gzipped and encrypted with AES-256-GCM (`MONCSYBK1 | nonce | ciphertext | tag`), written as one file through the GitHub contents API. Every upload is a commit, so the repository history keeps older copies.
-- **When.** `BACKUP_DEBOUNCE_MS` (10 s) after the last request that was not a read, only if SQLite's change counter moved, and once more when the server shuts down. A failed upload is retried after a minute and shows in `GET /health` (`backup.lastError`).
+- **What is uploaded.** A `VACUUM INTO` snapshot, gzipped and encrypted with AES-256-GCM (`MONCSYBK2 | generation | nonce | ciphertext | tag`; the magic and the generation are authenticated), written as one file through the GitHub contents API. Every upload is a commit, so the repository history keeps older copies.
+- **When.** `BACKUP_DEBOUNCE_MS` (10 s) after the last request that was not a read, only if SQLite's change counter moved, and once more when the server shuts down. A failed upload is retried after a minute.
 - **Restore.** On start, when the file at `DB_PATH` does not exist, the latest copy is downloaded and decrypted before the database is opened. If the copy exists but cannot be read or decrypted, the server does not start, so an empty database never overwrites a good backup.
-- **Limits.** Writes made in the last few seconds before the host kills the process without a shutdown signal are lost. Two instances running at once (during a deploy) can overwrite each other's last writes.
+- **Never over a newer copy.** Each upload has the next generation, and the database records the generation it came from (meta `backup_generation`, stamped into the uploaded copy too). Before writing over a remote copy it has not written itself, an instance checks that the remote generation is its own; the upload is a compare-and-swap on the file's sha. If another instance or a manual restore wrote the remote copy, uploads stop and `stopped: true` with the reason shows in `GET /backup/status`; a restart loads that copy.
+- **Status.** `GET /backup/status` (and the token-protected part of `GET /health`) returns `BackupStatus`: `lastBackupAt` and `generation` survive restarts because they travel with the database; `lastError` shows an expired token or any other failed upload.
+- **Limits.** Writes made in the last few seconds before the host kills the process without a shutdown signal are lost. When two instances run at once (during a deploy), the second writer stops instead of overwriting, so its writes after the first one's upload are not backed up.
 
 ## Environment variables
 
@@ -51,7 +53,7 @@ For hosts whose disk is wiped on restart (Render's free plan), set `BACKUP_GITHU
 | `HOST` | `127.0.0.1` | Bind address. Any other address needs `API_TOKEN` or `ALLOW_NO_AUTH=1` |
 | `DB_PATH` | `./data/expense.db` | SQLite file (`:memory:` for an ephemeral DB) |
 | `CORS_ORIGIN` | `http://localhost:5173,http://localhost:4173` | Allowed origins, comma-separated. Without `API_TOKEN`, `*` lets any website you visit read and change your data |
-| `API_TOKEN` / `API_TOKEN_FILE` | – | Bearer token for every route except `/health`. After 20 wrong tokens from one address in 10 minutes that address gets 429 until the window ends; requests without a token are not counted |
+| `API_TOKEN` / `API_TOKEN_FILE` | – | Bearer token for every route except `/health`. The right token is always accepted. After 20 wrong tokens from one address in 10 minutes, further wrong tokens from it get 429 until the window ends; requests without a token are not counted |
 | `ALLOW_NO_AUTH` | – | `1` = start on a non-localhost `HOST` without a token (logged as a warning) |
 | `TRUST_PROXY_HOPS` | `0` | Reverse proxies whose `X-Forwarded-For` is trusted for the client address (used by the wrong-token limit) |
 | `BACKUP_GITHUB_REPO` | – | `owner/name` of a private repository for the encrypted backup |
@@ -80,6 +82,7 @@ For hosts whose disk is wiped on restart (Render's free plan), set `BACKUP_GITHU
 | Method & path | Body / query | Response |
 |---|---|---|
 | `GET /health` | | `{ status, time, auth: "token" \| "none" }`; with a valid token also `ai: { provider, model }, revolut: { mode }, backup` |
+| `GET /backup/status` | | `BackupStatus`: `{ enabled, lastBackupAt, generation, lastError, pending, stopped }` |
 | `GET /categories` | | `Category[]` |
 | `POST /categories` | `{ name, icon, color, parentId?, budget? }` | `201 Category` (`isCustom: true`) |
 | `PATCH /categories/:id` | any subset of the create fields | `Category` |
@@ -90,7 +93,7 @@ For hosts whose disk is wiped on restart (Render's free plan), set `BACKUP_GITHU
 | `DELETE /transactions/:id` | | `204` |
 | `GET /summary` | `from`, `to` (required), `currency` (optional) | `Summary` |
 | `POST /receipts/scan` | multipart `file`: JPEG/PNG/WebP/HEIC/PDF, max 10 MB | `ReceiptScanResult` |
-| `POST /ai/analyze` | `AnalyzeRequest`; `scope: "products"` asks where each product was cheapest | `AnalyzeResponse`; 422 when the range has no receipt line items |
+| `POST /ai/analyze` | `AnalyzeRequest`; `scope: "products"` asks where each product was cheapest, optionally narrowed by `products: { q?, brand?, merchant? }` | `AnalyzeResponse`; 422 when the range has no (matching) receipt line items |
 | `GET /products` | `from`, `to` (optional) | `{ products: ProductStat[], stores: StoreRank[] }` from receipt line items (`@et/shared/products`) |
 | `POST /statements/parse` | multipart `file`: any bank's CSV/XLSX, CAMT.052/053/054, OFX, MT940, PDF (AI); optional fields `mapping` (JSON) and `currency`, sent before the file | `StatementPreview`; nothing is saved |
 | `POST /statements/import` | `{ transactions: StatementTx[] }` (max 20 000) | `{ imported, skipped, errors }`; rows whose `externalId` exists are skipped |

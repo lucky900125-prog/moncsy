@@ -13,10 +13,9 @@ services:
     buildCommand: npx --yes pnpm@10.28.0 install --frozen-lockfile && npx --yes pnpm@10.28.0 --filter @et/api build
     startCommand: cd apps/api && node --conditions=et-dist --disable-warning=ExperimentalWarning dist/index.js
     healthCheckPath: /api/health
+    # Node: the root .node-version file when there is one, else Render's default (24.x for services created after
+    # 2026-09-17, render.com/docs/node-version). NODE_VERSION would override the file, so it is not set here.
     envVars:
-      # Render prefers this over a .node-version file; keep the two the same. The API tests pass on 22 and 24.
-      - key: NODE_VERSION
-        value: "24"
       - key: HOST
         value: 0.0.0.0
       - key: CORS_ORIGIN

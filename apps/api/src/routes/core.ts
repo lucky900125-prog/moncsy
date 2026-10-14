@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import type { BackupStatus } from "@et/shared";
 import { isAuthorized, type AppDeps } from "../app.js";
 import {
   categoryCreateSchema,
@@ -12,6 +13,8 @@ import {
 
 type IdParams = { Params: { id: string } };
 
+const NO_BACKUP: BackupStatus = { enabled: false, lastBackupAt: null, generation: null, lastError: null, pending: false, stopped: false };
+
 export async function coreRoutes(app: FastifyInstance, { repo, ai, config, backup }: AppDeps): Promise<void> {
   // Open to everyone so clients can tell "server down" from "wrong token"; the setup details only with the token.
   app.get("/health", async (req) => {
@@ -21,9 +24,11 @@ export async function coreRoutes(app: FastifyInstance, { repo, ai, config, backu
       ...base,
       ai: { provider: ai.name, model: ai.model },
       revolut: { mode: config.revolut.mode },
-      backup: backup?.getStatus() ?? { enabled: false },
+      backup: backup?.getStatus() ?? NO_BACKUP,
     };
   });
+
+  app.get("/backup/status", async (): Promise<BackupStatus> => backup?.getStatus() ?? NO_BACKUP);
 
   app.get("/categories", async () => repo.listCategories());
 

@@ -106,6 +106,21 @@ export interface AnalyzeResponse {
   insights: Insight[];
 }
 
+/** GET /backup/status. The copy of the database in a private GitHub repository, for hosts whose disk is wiped on restart. */
+export interface BackupStatus {
+  enabled: boolean;
+  /** when the newest copy was made; survives restarts, since it is restored with the database */
+  lastBackupAt: string | null;
+  /** generation of the newest copy this database knows of; counts up by one per upload */
+  generation: number | null;
+  /** the last upload failed with this; uploads are retried */
+  lastError: string | null;
+  /** changes are waiting to be uploaded */
+  pending: boolean;
+  /** uploads stopped because the remote copy is not the one this database came from; lastError says why. Needs a restart. */
+  stopped: boolean;
+}
+
 export interface RevolutStatus {
   connected: boolean;
   mode: "business-api" | "open-banking" | "csv" | null;
@@ -159,6 +174,7 @@ export interface StatementPreview {
 /** HTTP contract (prefix /api). When the server has API_TOKEN set, every route except /health
  *  needs "Authorization: Bearer <token>".
  *  GET    /health
+ *  GET    /backup/status               -> BackupStatus
  *  GET    /categories                  -> Category[]
  *  POST   /categories                  body Omit<Category,"id"|"isCustom"> -> Category (isCustom=true)
  *  PATCH  /categories/:id              -> Category

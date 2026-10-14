@@ -50,16 +50,21 @@ afterEach(() => {
 });
 
 describe("backup blob", () => {
-  it("round-trips, and refuses a wrong key or a damaged file", () => {
+  it("round-trips with its generation, and refuses a wrong key, a damaged file or a changed generation", () => {
     const plain = Buffer.from("SQLite format 3\0 some data ".repeat(50));
-    const blob = encryptBlob(plain, key);
+    const blob = encryptBlob(plain, key, 7);
     expect(blob.includes(Buffer.from("some data"))).toBe(false);
-    expect(decryptBlob(blob, key)).toEqual(plain);
+    expect(decryptBlob(blob, key)).toEqual({ data: plain, generation: 7 });
     expect(() => decryptBlob(blob, randomBytes(32))).toThrow(/wrong BACKUP_KEY/);
     const broken = Buffer.from(blob);
     broken[broken.length - 20]! ^= 1;
     expect(() => decryptBlob(broken, key)).toThrow(/wrong BACKUP_KEY or a damaged file/);
+    // The generation is authenticated: raising it without the key makes the blob unreadable.
+    const bumped = Buffer.from(blob);
+    bumped[16]! ^= 1;
+    expect(() => decryptBlob(bumped, key)).toThrow(/wrong BACKUP_KEY or a damaged file/);
     expect(() => decryptBlob(Buffer.from("hello"), key)).toThrow(/not a moncsy backup/);
+    expect(() => encryptBlob(plain, key, 0)).toThrow(/Invalid backup generation/);
   });
 
   it("is configured all or nothing, with a 32-byte key", () => {
@@ -94,26 +99,100 @@ describe("backup and restore through the API", () => {
     await app1.deps.backup!.flush();
     expect(gh.state.puts).toBe(1);
     expect(gh.state.content!.includes(Buffer.from("Spar"))).toBe(false); // encrypted at rest on GitHub
+    expect(decryptBlob(gh.state.content!, key).generation).toBe(1);
 
     // A read does not create a commit, and neither does a flush with nothing new.
     await app1.inject("/api/transactions");
     await app1.deps.backup!.flush();
     expect(gh.state.puts).toBe(1);
     expect((await app1.inject("/api/health")).json().backup).toMatchObject({ enabled: true, lastError: null, pending: false });
+    const first = (await app1.inject("/api/backup/status")).json();
+    expect(first).toMatchObject({ enabled: true, generation: 1, lastBackupAt: expect.any(String), lastError: null, pending: false, stopped: false });
     await app1.close();
 
     // The instance restarts with an empty disk.
     rmSync(dbPath);
     const dbPath2 = tempDb();
-    expect(await restoreIfMissing(dbPath2, cfg)).toMatch(/^restored/);
+    expect(await restoreIfMissing(dbPath2, cfg)).toMatch(/^restored .* generation 1 /);
     expect(readFileSync(dbPath2).subarray(0, 15).toString()).toBe("SQLite format 3");
     const app2 = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath: dbPath2 } });
     expect((await app2.inject("/api/transactions")).json()).toMatchObject([{ merchant: "Spar", amount: -4785 }]);
+    // The restored database knows which copy it came from and when that copy was made.
+    expect((await app2.inject("/api/backup/status")).json()).toMatchObject({ generation: 1, lastBackupAt: first.lastBackupAt });
+    // Restarting without a write does not make a new commit.
+    await app2.deps.backup!.flush();
+    expect(gh.state.puts).toBe(1);
 
     // A second write updates the same file (with its sha) instead of failing.
     await app2.inject({ method: "DELETE", url: `/api/transactions/${created.json().id}` });
     await app2.close(); // close() flushes
     expect(gh.state.puts).toBe(2);
+    expect(decryptBlob(gh.state.content!, key).generation).toBe(2);
+  });
+
+  it("never overwrites a copy another instance wrote, and says so", async () => {
+    const gh = fakeGithub();
+    vi.stubGlobal("fetch", gh.fetchImpl);
+    const seed = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath: tempDb() } });
+    await seed.inject({ method: "POST", url: "/api/categories", payload: { name: "Közös", icon: "x", color: "#123456" } });
+    await seed.close();
+    const generation1 = gh.state.content!;
+
+    // A deploy: the old and the new instance both start from generation 1.
+    const start = async () => {
+      const dbPath = tempDb();
+      await restoreIfMissing(dbPath, cfg);
+      return buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath } });
+    };
+    const oldApp = await start();
+    const newApp = await start();
+    await newApp.inject({ method: "POST", url: "/api/categories", payload: { name: "Új példány", icon: "x", color: "#123456" } });
+    await newApp.deps.backup!.flush();
+    expect(gh.state.puts).toBe(2);
+
+    // The old instance reads the remote copy before its first upload, sees generation 2, and stops.
+    await oldApp.inject({ method: "POST", url: "/api/categories", payload: { name: "Régi példány", icon: "x", color: "#123456" } });
+    await oldApp.deps.backup!.flush();
+    expect((await oldApp.inject("/api/backup/status")).json()).toMatchObject({
+      stopped: true,
+      generation: 1,
+      pending: true,
+      lastError: expect.stringMatching(/holds generation 2, but this database came from generation 1/),
+    });
+    await oldApp.close(); // closing does not upload either
+    expect(gh.state.puts).toBe(2);
+    expect(decryptBlob(gh.state.content!, key).data.includes(Buffer.from("Új példány"))).toBe(true);
+
+    // Someone puts the older copy back by hand while the new instance runs: its next write is refused by GitHub
+    // (stale sha), and the retry stops instead of overwriting the copy that was put back.
+    gh.state.content = generation1;
+    gh.state.sha = "manual";
+    await newApp.inject({ method: "POST", url: "/api/categories", payload: { name: "Még egy", icon: "x", color: "#123456" } });
+    await newApp.deps.backup!.flush();
+    expect(newApp.deps.backup!.getStatus()).toMatchObject({ stopped: false, lastError: expect.stringMatching(/GitHub 409/) });
+    await newApp.deps.backup!.flush();
+    expect(newApp.deps.backup!.getStatus()).toMatchObject({
+      stopped: true,
+      lastError: expect.stringMatching(/holds generation 1, but this database came from generation 2/),
+    });
+    await newApp.close();
+    expect(gh.state.content).toBe(generation1);
+  });
+
+  it("does not overwrite a remote copy that this database was not restored from", async () => {
+    const gh = fakeGithub();
+    vi.stubGlobal("fetch", gh.fetchImpl);
+    const first = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath: tempDb() } });
+    await first.inject({ method: "POST", url: "/api/categories", payload: { name: "Eredeti", icon: "x", color: "#123456" } });
+    await first.close();
+
+    // A second database that never saw the backup, e.g. a leftover local file.
+    const stranger = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath: tempDb() } });
+    await stranger.inject({ method: "POST", url: "/api/categories", payload: { name: "Idegen", icon: "x", color: "#123456" } });
+    await stranger.deps.backup!.flush();
+    expect(stranger.deps.backup!.getStatus()).toMatchObject({ stopped: true, lastError: expect.stringMatching(/was not restored from it/) });
+    await stranger.close();
+    expect(gh.state.puts).toBe(1);
   });
 
   it("refuses to start empty when the copy cannot be read", async () => {
@@ -153,7 +232,9 @@ describe("wrong-token rate limit", () => {
     for (let i = 0; i < 21; i++) codes.push((await app.inject({ url: "/api/categories", headers: { authorization: "Bearer nope" } })).statusCode);
     expect(codes.slice(0, 20).every((c) => c === 401)).toBe(true);
     expect(codes[20]).toBe(429);
-    expect((await app.inject({ url: "/api/categories", headers: { authorization: "Bearer right" } })).statusCode).toBe(429);
+    // The right token is never refused, even from the address that is over the limit.
+    expect((await app.inject({ url: "/api/categories", headers: { authorization: "Bearer right" } })).statusCode).toBe(200);
+    expect((await app.inject({ url: "/api/categories", headers: { authorization: "Bearer nope" } })).statusCode).toBe(429);
     await app.close();
   });
 

@@ -67,6 +67,15 @@ describe("statement values", () => {
       credit: "Paid in",
       description: "Description",
     });
+    // German exports often label the booking text just "Text".
+    expect(detectMapping(["Buchungstag", "Valuta", "Auftraggeber/Empfänger", "Text", "Betrag", "Währung"])).toEqual({
+      date: "Buchungstag",
+      valueDate: "Valuta",
+      counterparty: "Auftraggeber/Empfänger",
+      description: "Text",
+      amount: "Betrag",
+      currency: "Währung",
+    });
   });
 });
 

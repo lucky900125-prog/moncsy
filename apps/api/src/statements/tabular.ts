@@ -31,7 +31,7 @@ const ALIASES: Record<StatementRole, string[]> = {
   ],
   description: [
     "kozlemeny", "megjegyzes", "leiras", "tranzakcio leirasa", "reszletek", "description", "details", "narrative", "memo",
-    "reference", "remittance information", "verwendungszweck", "buchungstext",
+    "reference", "remittance information", "verwendungszweck", "buchungstext", "text",
   ],
   type: ["tranzakcio tipusa", "tipus", "muvelet", "type", "transaction type", "umsatzart"],
   balance: ["egyenleg", "konyvelt egyenleg", "balance", "saldo", "kontostand"],

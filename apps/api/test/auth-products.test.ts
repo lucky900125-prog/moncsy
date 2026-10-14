@@ -21,6 +21,7 @@ describe("API token", () => {
       ["POST", "/api/ai/analyze"],
       ["POST", "/api/statements/import"],
       ["GET", "/api/products"],
+      ["GET", "/api/backup/status"],
     ] as const) {
       const r = await app.inject({ method, url });
       expect(r.statusCode, `${method} ${url}`).toBe(401);
@@ -28,6 +29,9 @@ describe("API token", () => {
     expect((await app.inject({ url: "/api/categories", headers: { authorization: "Bearer wrong" } })).statusCode).toBe(401);
     expect((await app.inject({ url: "/api/categories", headers: { authorization: "s3cret-token" } })).statusCode).toBe(401);
     expect((await app.inject({ url: "/api/categories", headers: { authorization: "Bearer s3cret-token" } })).statusCode).toBe(200);
+    expect((await app.inject({ url: "/api/backup/status", headers: { authorization: "Bearer s3cret-token" } })).json()).toEqual({
+      enabled: false, lastBackupAt: null, generation: null, lastError: null, pending: false, stopped: false,
+    });
     // CORS preflight carries no credentials and must not be refused.
     const pre = await app.inject({
       method: "OPTIONS",

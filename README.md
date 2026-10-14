@@ -41,7 +41,7 @@ A `render.yaml` egy Render Blueprint: az API-t az ingyenes csomagon futtatja, é
      - `BACKUP_GITHUB_REPO`, például `lucky900125-prog/moncsy-data`;
      - `BACKUP_GITHUB_TOKEN`, a 2. lépés tokenje;
      - `BACKUP_KEY`, a 3. lépés kulcsa.
-5. **Ellenőrzés.** A `https://<szolgáltatás neve>.onrender.com/api/health` címnek `{"status":"ok",…,"auth":"token"}` választ kell adnia.
+5. **Ellenőrzés.** A `https://<szolgáltatás neve>.onrender.com/api/health` címnek `{"status":"ok",…,"auth":"token"}` választ kell adnia. A mentés állapotát (utolsó mentés ideje, hiba, leállt-e) a `GET /api/backup/status` adja, ezt az app is megmutatja.
 6. **Az app összekötése.**
    - Az `API_TOKEN` értékét a Render generálja: Render → moncsy-api → Environment.
    - Ezt és az API címét a webapp és a mobilapp beállításaiban kell megadni.
