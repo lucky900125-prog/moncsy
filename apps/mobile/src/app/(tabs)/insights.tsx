@@ -13,11 +13,12 @@ const RANGES: { value: Range; label: string }[] = [
   { value: "quarter", label: "3 hónap" },
 ];
 
+// Whole calendar months, like the dashboard: a transaction later today (or dated later this month) is in "this month".
 function range(r: Range) {
   const now = new Date();
-  if (r === "this") return { from: startOfMonth(now), to: now };
+  if (r === "this") return { from: startOfMonth(now), to: endOfMonth(now) };
   if (r === "last") { const p = subMonths(now, 1); return { from: startOfMonth(p), to: endOfMonth(p) }; }
-  return { from: startOfMonth(subMonths(now, 2)), to: now };
+  return { from: startOfMonth(subMonths(now, 2)), to: endOfMonth(now) };
 }
 
 type Tab = "ai" | "details";
