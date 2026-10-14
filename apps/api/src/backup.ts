@@ -41,12 +41,21 @@ function readSecret(env: NodeJS.ProcessEnv, name: string): string | undefined {
   return env[name]?.trim() || undefined;
 }
 
-/** All of BACKUP_GITHUB_REPO, BACKUP_GITHUB_TOKEN and BACKUP_KEY, or none; a half-configured backup refuses to start. */
+/**
+ * All of BACKUP_GITHUB_REPO, BACKUP_GITHUB_TOKEN and BACKUP_KEY, or none; a half-configured backup refuses to start.
+ * REQUIRE_BACKUP=1 (set by render.yaml) turns "none" into a refusal too, for hosts whose disk is wiped on restart.
+ */
 export function loadBackupConfig(env: NodeJS.ProcessEnv = process.env): BackupConfig | null {
   const repo = env.BACKUP_GITHUB_REPO?.trim();
   const token = readSecret(env, "BACKUP_GITHUB_TOKEN");
   const keyText = readSecret(env, "BACKUP_KEY");
   const given = [repo, token, keyText].filter(Boolean).length;
+  if (given === 0 && env.REQUIRE_BACKUP === "1") {
+    throw new Error(
+      "REQUIRE_BACKUP=1 but BACKUP_GITHUB_REPO, BACKUP_GITHUB_TOKEN and BACKUP_KEY are not set; " +
+        "on a host without a persistent disk every restart would start from an empty database.",
+    );
+  }
   if (given === 0) return null;
   if (given < 3) {
     throw new Error("Backup needs all of BACKUP_GITHUB_REPO, BACKUP_GITHUB_TOKEN (or _FILE) and BACKUP_KEY (or _FILE); some are missing.");
@@ -56,7 +65,9 @@ export function loadBackupConfig(env: NodeJS.ProcessEnv = process.env): BackupCo
   if (key.length !== 32) {
     throw new Error("BACKUP_KEY must be 32 random bytes in base64 (generate one with: openssl rand -base64 32)");
   }
-  return { repo: repo!, token: token!, key, path: env.BACKUP_GITHUB_PATH?.trim() || "moncsy.db.enc", debounceMs: Number(env.BACKUP_DEBOUNCE_MS || 10_000) };
+  const debounceMs = Number(env.BACKUP_DEBOUNCE_MS?.trim() || 10_000);
+  if (!Number.isInteger(debounceMs) || debounceMs < 0) throw new Error(`Invalid BACKUP_DEBOUNCE_MS "${env.BACKUP_DEBOUNCE_MS}" (expected milliseconds)`);
+  return { repo: repo!, token: token!, key, path: env.BACKUP_GITHUB_PATH?.trim() || "moncsy.db.enc", debounceMs };
 }
 
 export function encryptBlob(plain: Buffer, key: Buffer): Buffer {

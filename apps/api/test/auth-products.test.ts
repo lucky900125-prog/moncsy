@@ -19,6 +19,7 @@ describe("API token", () => {
       ["POST", "/api/revolut/sync"],
       ["POST", "/api/ai/analyze"],
       ["POST", "/api/statements/import"],
+      ["GET", "/api/products"],
     ] as const) {
       const r = await app.inject({ method, url });
       expect(r.statusCode, `${method} ${url}`).toBe(401);
@@ -122,6 +123,29 @@ describe("POST /api/ai/analyze scope=products", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().summary).toMatch(/5 terméket vettél több boltban; ezek közül 5 esetben a Lidl/);
     expect(res.json().insights[0].title).toMatch(/: Lidl$/);
+    await app.close();
+  });
+
+  it("GET /api/products lists the products of saved receipts per store, within the range", async () => {
+    const app = await testApp();
+    expect((await app.inject("/api/products")).json()).toEqual({ products: [], stores: [] });
+    const milk = (unitPrice: number) => [{ name: "MIZO TEJ 2,8% 1L", quantity: 1, unitPrice, total: unitPrice, product: "tej", brand: "Mizo", packSize: 1, packUnit: "l" as const }];
+    await app.deps.repo.createTransaction({ amount: -459, currency: "HUF", date: "2026-10-12", merchant: "SPAR Magyarország Kft.", categoryId: "groceries", source: "receipt", items: milk(459) });
+    await app.deps.repo.createTransaction({ amount: -419, currency: "HUF", date: "2026-10-13", merchant: "Lidl", categoryId: "groceries", source: "receipt", items: milk(419) });
+    await app.deps.repo.createTransaction({ amount: -499, currency: "HUF", date: "2026-09-01", merchant: "Tesco", categoryId: "groceries", source: "receipt", items: milk(499) });
+
+    const res = await app.inject("/api/products?from=2026-10-01&to=2026-10-31");
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.products).toHaveLength(1);
+    expect(body.products[0]).toMatchObject({ product: "Tej", brand: "Mizo", purchases: 2, cheapest: "Lidl", saving: 40 });
+    expect(body.products[0].stores.map((s: { store: string }) => s.store)).toEqual(["Lidl", "Spar"]);
+    expect(body.stores).toEqual([
+      { store: "Lidl", cheapestFor: 1, compared: 1 },
+      { store: "Spar", cheapestFor: 0, compared: 1 },
+    ]);
+    expect((await app.inject("/api/products")).json().products[0].purchases).toBe(3);
+    expect((await app.inject("/api/products?from=nope")).statusCode).toBe(400);
     await app.close();
   });
 });

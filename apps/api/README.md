@@ -1,6 +1,6 @@
 # @et/api
 
-The expense tracker's backend: Fastify on Node 22, SQLite storage, a pluggable AI provider for receipt scanning and spending analysis, and Revolut import. It implements the HTTP contract in `packages/shared/src/index.ts`. All routes are under `/api`.
+The expense tracker's backend: Fastify on Node 22, SQLite storage with an optional encrypted off-site backup, a pluggable AI provider for receipt scanning and spending and product analysis, bank statement import for any bank, and Revolut import. It implements the HTTP contract in `packages/shared/src/index.ts`. All routes are under `/api`, and with `API_TOKEN` set every route except `/health` needs `Authorization: Bearer <API_TOKEN>`.
 
 ```bash
 pnpm install                 # from the repo root
@@ -14,6 +14,8 @@ Copy `.env.example` to `.env`. The server loads `./.env` from its working direct
 ## Storage
 
 The API uses SQLite through **`node:sqlite`**, which is built into Node 22, rather than `better-sqlite3`. pnpm 10 blocks dependency build scripts unless they are allow-listed in the workspace root config, so `better-sqlite3`'s native binary never gets built. `node:sqlite` needs no native build. Node prints an `ExperimentalWarning` for it, and the `dev`/`start` scripts suppress that warning.
+
+Everything above the database talks to the small async `DB` interface in `db.ts` (`all`, `get`, `run`, `exec`, `tx`, `close`), so another engine can be dropped in without touching the repository. `tx()` runs one transaction at a time; queries outside it wait for it to finish.
 
 The database is created at `DB_PATH` on first run. The default categories are seeded once. Their ids are stable English slugs and their names are Hungarian:
 
@@ -32,16 +34,34 @@ The database is created at `DB_PATH` on first run. The default categories are se
 | other | Egyéb | circle-ellipsis | #9e9e94 |
 | income | Bevétel | wallet | #6e9f72 |
 
+### Off-site backup (`src/backup.ts`)
+
+For hosts whose disk is wiped on restart (Render's free plan), set `BACKUP_GITHUB_REPO`, `BACKUP_GITHUB_TOKEN` and `BACKUP_KEY`:
+
+- **What is uploaded.** A `VACUUM INTO` snapshot, gzipped and encrypted with AES-256-GCM (`MONCSYBK1 | nonce | ciphertext | tag`), written as one file through the GitHub contents API. Every upload is a commit, so the repository history keeps older copies.
+- **When.** `BACKUP_DEBOUNCE_MS` (10 s) after the last request that was not a read, only if SQLite's change counter moved, and once more when the server shuts down. A failed upload is retried after a minute and shows in `GET /health` (`backup.lastError`).
+- **Restore.** On start, when the file at `DB_PATH` does not exist, the latest copy is downloaded and decrypted before the database is opened. If the copy exists but cannot be read or decrypted, the server does not start, so an empty database never overwrites a good backup.
+- **Limits.** Writes made in the last few seconds before the host kills the process without a shutdown signal are lost. Two instances running at once (during a deploy) can overwrite each other's last writes.
+
 ## Environment variables
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `PORT` | `8787` | HTTP port |
-| `HOST` | `0.0.0.0` | Bind address |
+| `HOST` | `127.0.0.1` | Bind address. Any other address needs `API_TOKEN` or `ALLOW_NO_AUTH=1` |
 | `DB_PATH` | `./data/expense.db` | SQLite file (`:memory:` for an ephemeral DB) |
-| `CORS_ORIGIN` | `http://localhost:5173,http://localhost:4173` | Allowed origins, comma-separated. The API has no auth yet, so `*` lets any website you visit read and change your data |
-| `STATEMENT_TZ` | `Europe/Budapest` | Time zone of the wall-clock times in Revolut statements |
-| `DEFAULT_CURRENCY` | `HUF` | Summary/analysis currency when a range has no transactions |
+| `CORS_ORIGIN` | `http://localhost:5173,http://localhost:4173` | Allowed origins, comma-separated. Without `API_TOKEN`, `*` lets any website you visit read and change your data |
+| `API_TOKEN` / `API_TOKEN_FILE` | – | Bearer token for every route except `/health`. After 20 wrong tokens from one address in 10 minutes that address gets 429 until the window ends; requests without a token are not counted |
+| `ALLOW_NO_AUTH` | – | `1` = start on a non-localhost `HOST` without a token (logged as a warning) |
+| `TRUST_PROXY_HOPS` | `0` | Reverse proxies whose `X-Forwarded-For` is trusted for the client address (used by the wrong-token limit) |
+| `BACKUP_GITHUB_REPO` | – | `owner/name` of a private repository for the encrypted backup |
+| `BACKUP_GITHUB_TOKEN` / `_FILE` | – | Fine-grained token with Contents read and write on that repository only |
+| `BACKUP_KEY` / `_FILE` | – | 32 random bytes, base64 (`openssl rand -base64 32`). Without it the backup cannot be decrypted |
+| `BACKUP_GITHUB_PATH` | `moncsy.db.enc` | File path inside the backup repository |
+| `BACKUP_DEBOUNCE_MS` | `10000` | Delay after the last write before uploading |
+| `REQUIRE_BACKUP` | – | `1` = refuse to start without the three `BACKUP_` values |
+| `STATEMENT_TZ` | `Europe/Budapest` | Time zone of the wall-clock times in bank and Revolut statements |
+| `DEFAULT_CURRENCY` | `HUF` | Summary/analysis currency when a range has no transactions, and statement currency when the file has none |
 | `AI_PROVIDER` | auto | `anthropic` \| `openai` \| `ollama` \| `mock`. If unset: `anthropic` when `ANTHROPIC_API_KEY` is set, else `openai` when `OPENAI_API_KEY` is set, else `mock` |
 | `AI_MODEL` | per provider | `claude-sonnet-5-5` / `gpt-4.1-mini` / `llama3.2-vision` |
 | `AI_API_KEY` | – | Key for the selected provider (overrides the two below) |
@@ -59,7 +79,7 @@ The database is created at `DB_PATH` on first run. The default categories are se
 
 | Method & path | Body / query | Response |
 |---|---|---|
-| `GET /health` | | `{ status, time, ai: { provider, model }, revolut: { mode } }` |
+| `GET /health` | | `{ status, time, auth: "token" \| "none" }`; with a valid token also `ai: { provider, model }, revolut: { mode }, backup` |
 | `GET /categories` | | `Category[]` |
 | `POST /categories` | `{ name, icon, color, parentId?, budget? }` | `201 Category` (`isCustom: true`) |
 | `PATCH /categories/:id` | any subset of the create fields | `Category` |
@@ -70,7 +90,10 @@ The database is created at `DB_PATH` on first run. The default categories are se
 | `DELETE /transactions/:id` | | `204` |
 | `GET /summary` | `from`, `to` (required), `currency` (optional) | `Summary` |
 | `POST /receipts/scan` | multipart `file`: JPEG/PNG/WebP/HEIC/PDF, max 10 MB | `ReceiptScanResult` |
-| `POST /ai/analyze` | `AnalyzeRequest` | `AnalyzeResponse` |
+| `POST /ai/analyze` | `AnalyzeRequest`; `scope: "products"` asks where each product was cheapest | `AnalyzeResponse`; 422 when the range has no receipt line items |
+| `GET /products` | `from`, `to` (optional) | `{ products: ProductStat[], stores: StoreRank[] }` from receipt line items (`@et/shared/products`) |
+| `POST /statements/parse` | multipart `file`: any bank's CSV/XLSX, CAMT.052/053/054, OFX, MT940, PDF (AI); optional fields `mapping` (JSON) and `currency`, sent before the file | `StatementPreview`; nothing is saved |
+| `POST /statements/import` | `{ transactions: StatementTx[] }` (max 20 000) | `{ imported, skipped, errors }`; rows whose `externalId` exists are skipped |
 | `GET /revolut/status` | | `RevolutStatus` |
 | `POST /revolut/sync` | | `{ imported, skipped }` |
 | `POST /revolut/import-statement` | multipart `file`: Revolut CSV or XLSX statement | `{ imported, skipped, errors }` |
@@ -79,7 +102,7 @@ The database is created at `DB_PATH` on first run. The default categories are se
 
 Conventions:
 
-- **Errors.** Every error returns `{ error: string, details?: unknown }`. The status codes are 400 (validation), 404, 409 (conflict, built-in category), 413 (upload > 10 MB), 415 (wrong file type), 501 (open-banking sync) and 502 (AI provider or Revolut upstream failure, or invalid AI JSON).
+- **Errors.** Every error returns `{ error: string, details?: unknown }`. The status codes are 400 (validation), 401 (missing or wrong token), 404, 409 (conflict, built-in category), 413 (upload > 10 MB), 415 (wrong file type), 422 (product analysis without receipt lines), 429 (too many wrong tokens), 501 (open-banking sync), 502 (AI provider or Revolut upstream failure, or invalid AI JSON) and 503 (Revolut business-api without a token).
 - **Dates.** Dates are stored as full ISO 8601 UTC strings. Any parseable date is accepted on input, and `2026-10-12` becomes `2026-10-12T00:00:00.000Z`. A date-only `to` covers the whole day.
 - **`GET /summary`.** Amounts in different currencies are never added together. The summary covers `currency`, or else the most common currency in the range, or else `DEFAULT_CURRENCY`. `income` and `expense` are non-negative magnitudes. `byCategory[].total` is the signed sum (negative = spending), largest spend first. An income category has a positive total.
 - **Notes.** An empty `note` is stored as no note.
@@ -119,6 +142,16 @@ All adapters use plain `fetch`, with no vendor SDKs. The callers in `src/service
 - totals for other currencies
 
 The model answers in Hungarian unless the question is in another language.
+
+## Bank statements (`src/statements/`)
+
+`POST /statements/parse` reads a statement from any bank and returns a preview; `POST /statements/import` saves the rows the user confirmed. The format is detected from the content, not the file name:
+
+- **CSV / XLSX.** The header row is searched for in the first 40 rows, and columns are matched by Hungarian, English and German names (accents and case ignored) to roles such as `date`, `amount` or `debit` + `credit`, `currency`, `counterparty`, `description`. The decimal separator and the day/month order are detected per column. CSV may be UTF-8 or Windows-1250, with `;`, `,`, tab or `|` delimiters. When the date or the amount cannot be found, the preview lists the columns so the client can send a `mapping`. A Revolut export is routed to the Revolut parser.
+- **CAMT.052/053/054** (ISO 20022 XML), **OFX** and **MT940** are read by their structure.
+- **PDF** goes to the AI provider's vision call, so it needs a real provider.
+- **Old `.xls`** and XML that is not a bank statement are refused with 415 and a message saying what to do.
+- **Deduplication.** `externalId` is the bank's reference when there is one, otherwise `stmt:` + a hash of date, amount, currency, counterparty and description, with a `:n` suffix for identical rows in one file.
 
 ## Revolut (`src/revolut/`)
 
@@ -211,10 +244,12 @@ src/
   index.ts            entry (loads .env, listens)
   app.ts              buildApp(): plugins, error handler, routes; injectable db/ai/revolut for tests
   config.ts db.ts repository.ts schemas.ts errors.ts
+  backup.ts           encrypted off-site backup to a private GitHub repository, restore on start
   ai/                 provider interface + anthropic/openai/ollama/mock adapters, strict JSON parsing
   services/           receipt.ts (scan prompt + validation), analyze.ts (aggregate + prompt)
   revolut/            csv.ts, business-api.ts, open-banking.ts, categorize.ts
   io/                 xlsx.ts, xml.ts, common.ts (shared import pipeline)
-  routes/             core.ts, ai.ts, revolut.ts, io.ts
+  statements/         any bank's statement: tabular.ts (CSV/XLSX), formats.ts (CAMT/OFX/MT940), pdf.ts, values.ts
+  routes/             core.ts, ai.ts, revolut.ts, io.ts, statements.ts, products.ts
 test/                 vitest suites (fastify.inject, in-memory SQLite, mock provider)
 ```

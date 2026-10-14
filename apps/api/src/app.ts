@@ -12,6 +12,7 @@ import { createRevolutProvider, type RevolutProvider } from "./revolut/index.js"
 import { aiRoutes } from "./routes/ai.js";
 import { coreRoutes } from "./routes/core.js";
 import { ioRoutes } from "./routes/io.js";
+import { productRoutes } from "./routes/products.js";
 import { revolutRoutes } from "./routes/revolut.js";
 import { statementRoutes } from "./routes/statements.js";
 
@@ -90,7 +91,10 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
             return reply.status(429).send({ error: "Too many wrong API tokens from this address; try again later" });
           }
           if (!isAuthorized(config, req)) {
-            failures.set(req.ip, { count: (f?.count ?? 0) + 1, resetAt: f?.resetAt ?? now + AUTH_WINDOW_MS });
+            // Only a sent token is a guess; counting bare requests would let any crawler lock the owner out.
+            if (req.headers.authorization) {
+              failures.set(req.ip, { count: (f?.count ?? 0) + 1, resetAt: f?.resetAt ?? now + AUTH_WINDOW_MS });
+            }
             return reply.status(401).send({ error: "Missing or wrong API token (Authorization: Bearer <API_TOKEN>)" });
           }
         });
@@ -107,6 +111,7 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
       await revolutRoutes(api, deps);
       await ioRoutes(api, deps);
       await statementRoutes(api, deps);
+      await productRoutes(api, deps);
     },
     { prefix: "/api" },
   );

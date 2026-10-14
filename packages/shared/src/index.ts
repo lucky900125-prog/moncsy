@@ -165,6 +165,8 @@ export interface StatementPreview {
  *  POST   /statements/parse            multipart "file" (any bank's CSV/XLSX, CAMT.053 XML, OFX, MT940, PDF) and optional
  *                                      fields "mapping" (StatementMapping JSON), "currency" sent before the file -> StatementPreview
  *  POST   /statements/import           { transactions: StatementTx[] } -> { imported; skipped; errors: string[] }
+ *  GET    /products?from&to            -> { products: ProductStat[]; stores: StoreRank[] } (from receipt line items;
+ *                                      types in "@et/shared/products")
  *  POST   /import                      multipart "file" (.xlsx | .xml) -> { imported; skipped; errors: string[] }
  *  GET    /export?format=xlsx|xml&from&to -> file download
  */

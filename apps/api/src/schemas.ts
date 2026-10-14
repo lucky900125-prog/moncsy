@@ -80,6 +80,11 @@ export const analyzeRequestSchema = z.object({
   scope: z.enum(["spending", "products"]).default("spending"),
 });
 
+export const productQuerySchema = z.object({
+  from: isoDate.optional(),
+  to: isoDate.optional(),
+});
+
 export const exportQuerySchema = z.object({
   format: z.enum(["xlsx", "xml"]).default("xlsx"),
   from: isoDate.optional(),

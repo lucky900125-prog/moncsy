@@ -64,8 +64,12 @@ describe("backup blob", () => {
 
   it("is configured all or nothing, with a 32-byte key", () => {
     expect(loadBackupConfig({})).toBeNull();
+    expect(() => loadBackupConfig({ REQUIRE_BACKUP: "1" })).toThrow(/every restart would start from an empty database/);
     expect(() => loadBackupConfig({ BACKUP_GITHUB_REPO: "me/x" })).toThrow(/some are missing/);
     expect(() => loadBackupConfig({ BACKUP_GITHUB_REPO: "me/x", BACKUP_GITHUB_TOKEN: "t", BACKUP_KEY: "c2hvcnQ=" })).toThrow(/32 random bytes/);
+    expect(() => loadBackupConfig({ BACKUP_GITHUB_REPO: "me/x", BACKUP_GITHUB_TOKEN: "t", BACKUP_KEY: key.toString("base64"), BACKUP_DEBOUNCE_MS: "soon" })).toThrow(
+      /Invalid BACKUP_DEBOUNCE_MS "soon"/,
+    );
     expect(loadBackupConfig({ BACKUP_GITHUB_REPO: "me/x", BACKUP_GITHUB_TOKEN: "t", BACKUP_KEY: key.toString("base64") })).toMatchObject({
       repo: "me/x",
       path: "moncsy.db.enc",
@@ -151,5 +155,18 @@ describe("wrong-token rate limit", () => {
     expect(codes[20]).toBe(429);
     expect((await app.inject({ url: "/api/categories", headers: { authorization: "Bearer right" } })).statusCode).toBe(429);
     await app.close();
+  });
+
+  it("does not count requests that send no token at all", async () => {
+    const app = await testApp({ config: { apiToken: "right" } });
+    for (let i = 0; i < 25; i++) expect((await app.inject({ url: "/api/categories" })).statusCode).toBe(401);
+    expect((await app.inject({ url: "/api/categories", headers: { authorization: "Bearer right" } })).statusCode).toBe(200);
+    await app.close();
+  });
+
+  it("validates TRUST_PROXY_HOPS", () => {
+    expect(loadConfig({}).trustProxyHops).toBe(0);
+    expect(loadConfig({ TRUST_PROXY_HOPS: "1" }).trustProxyHops).toBe(1);
+    expect(() => loadConfig({ TRUST_PROXY_HOPS: "one" })).toThrow(/Invalid TRUST_PROXY_HOPS "one"/);
   });
 });

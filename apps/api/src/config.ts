@@ -56,6 +56,14 @@ function pickPort(env: NodeJS.ProcessEnv): number {
   return port;
 }
 
+function pickProxyHops(env: NodeJS.ProcessEnv): number {
+  const raw = env.TRUST_PROXY_HOPS?.trim();
+  if (!raw) return 0;
+  const hops = Number(raw);
+  if (!Number.isInteger(hops) || hops < 0 || hops > 10) throw new Error(`Invalid TRUST_PROXY_HOPS "${raw}" (expected an integer 0-10)`);
+  return hops;
+}
+
 const LOOPBACK = new Set(["127.0.0.1", "::1", "localhost"]);
 
 /**
@@ -82,7 +90,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     dbPath: env.DB_PATH || "./data/expense.db",
     corsOrigin: env.CORS_ORIGIN || "http://localhost:5173,http://localhost:4173",
     apiToken: (env.API_TOKEN_FILE ? readFileSync(env.API_TOKEN_FILE, "utf8") : env.API_TOKEN)?.trim() || undefined,
-    trustProxyHops: Number(env.TRUST_PROXY_HOPS || 0),
+    trustProxyHops: pickProxyHops(env),
     defaultCurrency: (env.DEFAULT_CURRENCY || "HUF").toUpperCase(),
     statementTz: env.STATEMENT_TZ || "Europe/Budapest",
     ai: {
