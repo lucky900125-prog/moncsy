@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { readUpload, type AppDeps } from "../app.js";
-import { HttpError } from "../errors.js";
+import { HttpError, badRequest } from "../errors.js";
+import { stripJpegMetadata } from "../io/jpeg.js";
 import { toIso, rangeEnd } from "../repository.js";
 import { analyzeRequestSchema, parseOrThrow } from "../schemas.js";
 import { aggregate, analyze, productAggregate } from "../services/analyze.js";
@@ -36,7 +37,16 @@ export async function aiRoutes(app: FastifyInstance, { repo, ai, config }: AppDe
     if (!ACCEPTED.has(mime)) {
       throw new HttpError(415, `Unsupported file type ${mime}; send JPEG, PNG, WebP, HEIC or PDF`);
     }
-    return scanReceipt(ai, await repo.listCategories(), file.data.toString("base64"), mime);
+    // A photo's EXIF can hold where it was taken; the clients re-encode without it, and this holds for any other sender.
+    let image = file.data;
+    if (mime === "image/jpeg") {
+      try {
+        image = stripJpegMetadata(file.data);
+      } catch (e) {
+        throw badRequest(`The image is not a readable JPEG: ${(e as Error).message}`);
+      }
+    }
+    return scanReceipt(ai, await repo.listCategories(), image.toString("base64"), mime);
   });
 
   app.post("/ai/analyze", async (req) => {

@@ -26,6 +26,36 @@ describe("POST /api/receipts/scan (mock provider)", () => {
     await app.close();
   });
 
+  it("sends the AI a photo without the place, device and owner its EXIF, XMP and comments name", async () => {
+    // EXIF (big-endian TIFF): IFD0 with Orientation 6 and the camera Make.
+    const tiff = Buffer.from("4d4d002a000000080002011200030000000100060000010f000200000011000000260000000053656372657450686f6e654d616b657200", "hex");
+    const seg = (marker: number, body: Buffer) => Buffer.concat([Buffer.from([0xff, marker, (body.length + 2) >> 8, (body.length + 2) & 0xff]), body]);
+    const photo = Buffer.concat([
+      FAKE_JPEG.subarray(0, 20),
+      seg(0xe1, Buffer.concat([Buffer.from("Exif\0\0", "latin1"), tiff])),
+      seg(0xe1, Buffer.from('http://ns.adobe.com/xap/1.0/\0<x:xmpmeta photoshop:City="Budapest"/>', "latin1")),
+      seg(0xfe, Buffer.from("owner: Kovacs Anna", "latin1")),
+      FAKE_JPEG.subarray(20),
+    ]);
+    const seen: Buffer[] = [];
+    const answer = JSON.stringify({ merchant: "Spar", date: "2026-10-01", total: 459, currency: "HUF", items: [], suggestedCategoryId: null, confidence: 0.9 });
+    const app = await testApp({ ai: { ...canned(answer), vision: async (b64) => (seen.push(Buffer.from(b64, "base64")), answer) } });
+    const r = await app.inject({ method: "POST", url: "/api/receipts/scan", ...multipart("blokk.jpg", "image/jpeg", photo) });
+    expect(r.statusCode, r.body).toBe(200);
+    expect(seen).toHaveLength(1);
+    for (const leak of ["SecretPhoneMaker", "Budapest", "Kovacs", "xmpmeta"]) expect(seen[0]!.includes(leak), leak).toBe(false);
+    // What decoding needs is all there: the image bytes as sent, and the orientation in an EXIF block of its own.
+    expect(seen[0]!.subarray(0, 20)).toEqual(FAKE_JPEG.subarray(0, 20));
+    expect(seen[0]!.subarray(56)).toEqual(FAKE_JPEG.subarray(20));
+    expect(seen[0]!.subarray(20, 56).toString("hex")).toMatch(/^ffe10022457869660000.*01120003000000010006/);
+
+    const broken = await app.inject({ method: "POST", url: "/api/receipts/scan", ...multipart("blokk.jpg", "image/jpeg", FAKE_JPEG.subarray(0, 200)) });
+    expect(broken.statusCode).toBe(400);
+    expect(broken.json().error).toMatch(/^The image is not a readable JPEG: /);
+    expect(seen).toHaveLength(1);
+    await app.close();
+  });
+
   it("accepts PDFs by magic bytes even with a generic content type", async () => {
     const app = await testApp();
     const r = await app.inject({ method: "POST", url: "/api/receipts/scan", ...multipart("szamla", "application/octet-stream", Buffer.from("%PDF-1.7\n...")) });
