@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { Worker } from "node:worker_threads";
 import ExcelJS from "exceljs";
 import { HttpError, badRequest } from "../errors.js";
@@ -71,54 +72,126 @@ const MAX_VALIDATED_CELLS = 200_000;
 const MAX_NAMED_CELLS = 200_000;
 const MAX_COLUMN = 16_384;
 
-const columnNumber = (letters: string) => [...letters].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0);
+// ExcelJS's own address parser, so a range is sized as ExcelJS will expand it: it skips stray characters, for one.
+const colCache = createRequire(import.meta.url)("exceljs/lib/utils/col-cache.js") as {
+  decodeEx(ref: string): { top?: number; left?: number; bottom?: number; right?: number };
+};
 
-/** Cells covered by "A1:B2", "$A$1:$B$2" or "C3", summed over every such reference in the text. */
-function cellsIn(refs: string): number {
-  let cells = 0;
-  for (const m of refs.matchAll(/\$?([A-Z]{1,3})\$?(\d{1,7})(?::\$?([A-Z]{1,3})\$?(\d{1,7}))?/g)) {
-    const [c1, r1] = [columnNumber(m[1]!), Number(m[2])];
-    const [c2, r2] = m[3] ? [columnNumber(m[3]), Number(m[4])] : [c1, r1];
-    cells += (Math.abs(c2 - c1) + 1) * (Math.abs(r2 - r1) + 1);
+/** Cells ExcelJS makes of one reference ("A1:B2", "$A$1:$B$2", "Sheet1!A1:B2", "C3"). */
+function cellsOf(ref: string): number {
+  try {
+    const r = colCache.decodeEx(ref);
+    if (r.top === undefined) return 1;
+    const cells = (r.bottom! - r.top + 1) * (r.right! - r.left! + 1);
+    return Number.isFinite(cells) ? cells : 0;
+  } catch {
+    // ExcelJS cannot read it either: a merge or validation written so fails the load, and such a defined name is skipped.
+    return 0;
   }
-  return cells;
+}
+
+const NAMED_ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+const ENTITY = /&(?:#(\d+)|#x([\da-fA-F]+)|(amp|lt|gt|quot|apos));/y;
+
+/**
+ * XML's five named entities and its numeric character references, decoded as an XML parser reads them. A loop over the
+ * ampersands rather than a replace with a callback: a value of millions of references is decoded in about half the time.
+ */
+function decodeXml(text: string): string {
+  let amp = text.indexOf("&");
+  if (amp < 0) return text;
+  const parts: string[] = [];
+  let from = 0;
+  for (; amp >= 0; amp = text.indexOf("&", amp + 1)) {
+    ENTITY.lastIndex = amp;
+    const m = ENTITY.exec(text);
+    if (!m) continue;
+    const code = m[3] ? 0 : m[1] !== undefined ? Number(m[1]) : parseInt(m[2]!, 16);
+    if (code > 0x10ffff) continue;
+    parts.push(text.slice(from, amp), m[3] ? NAMED_ENTITIES[m[3]]! : String.fromCodePoint(code));
+    from = ENTITY.lastIndex;
+    amp = from - 1;
+  }
+  parts.push(text.slice(from));
+  return parts.join("");
 }
 
 /**
- * The attribute values of every <tag ...> in the XML (any namespace prefix). [^<>]* stops at the next tag, so a
- * malformed file of many unclosed tags is still read in linear time.
+ * Where the tag whose attributes start at `from` closes: the next > outside quotes. XML allows a > inside a quoted value
+ * but no <, so a < first means a broken tag (-1). A loop rather than a regex: no backtracking, however long the tag.
  */
-function* attributes(xml: string, tag: string, attribute: string): Generator<string> {
-  const value = new RegExp(`\\b${attribute}="([^"]*)"`);
-  for (const m of xml.matchAll(new RegExp(`<(?:\\w+:)?${tag}\\b([^<>]*)>`, "g"))) {
-    const v = m[1]!.match(value)?.[1];
-    if (v !== undefined) yield v;
+function tagEnd(xml: string, from: number): number {
+  let quote = "";
+  for (let i = from; i < xml.length; i++) {
+    const c = xml[i]!;
+    if (c === "<") return -1;
+    if (quote) {
+      if (c === quote) quote = "";
+    } else if (c === '"' || c === "'") quote = c;
+    else if (c === ">") return i;
+  }
+  return -1;
+}
+
+/** The attribute text of every opening <tag ...> in the XML (any namespace prefix), and where each tag ends. */
+function* tags(xml: string, tag: string): Generator<{ attributes: string; end: number }> {
+  const open = new RegExp(`<(?:\\w+:)?${tag}\\b`, "g");
+  for (let m = open.exec(xml); m; m = open.exec(xml)) {
+    const end = tagEnd(xml, open.lastIndex);
+    if (end < 0) continue;
+    yield { attributes: xml.slice(open.lastIndex, end), end };
+    open.lastIndex = end + 1;
   }
 }
 
-function checkRanges(name: string, content: Buffer): void {
-  if (/^xl\/worksheets\/[^/]+\.xml$/.test(name)) {
-    const xml = content.toString("utf8");
-    let merged = 0;
-    for (const ref of attributes(xml, "mergeCell", "ref")) merged += cellsIn(ref);
-    if (merged > MAX_MERGED_CELLS) {
-      throw new HttpError(413, `The XLSX file merges ${merged} cells; more than ${MAX_MERGED_CELLS} are not read. Unmerge them or save the sheet as CSV`);
+/** The decoded values of an attribute on every <tag ...> in the XML, read pair by pair as a parser does. */
+function* attributes(xml: string, tag: string, attribute: string): Generator<string> {
+  for (const t of tags(xml, tag)) {
+    for (const a of t.attributes.matchAll(/([^\s=]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) {
+      if (a[1] === attribute || a[1]!.endsWith(`:${attribute}`)) yield decodeXml(a[2] ?? a[3]!);
     }
-    let validated = 0;
-    for (const ref of attributes(xml, "dataValidation", "sqref")) validated += cellsIn(ref);
-    if (validated > MAX_VALIDATED_CELLS) {
-      throw new HttpError(413, `The XLSX file has data validation on ${validated} cells; more than ${MAX_VALIDATED_CELLS} are not read. Remove it or save the sheet as CSV`);
-    }
-    for (const max of attributes(xml, "col", "max")) {
-      if (Number(max) > MAX_COLUMN) throw badRequest(`The XLSX file describes column ${max}; a sheet has ${MAX_COLUMN} columns`);
-    }
-  } else if (name === "xl/workbook.xml") {
-    const xml = content.toString("utf8");
-    let named = 0;
-    for (const m of xml.matchAll(/<(?:\w+:)?definedName\b[^<>]*>([^<]*)</g)) named += cellsIn(m[1]!);
-    if (named > MAX_NAMED_CELLS) {
-      throw new HttpError(413, `The XLSX file's defined names cover ${named} cells; more than ${MAX_NAMED_CELLS} are not read. Delete the names or save the sheet as CSV`);
-    }
+  }
+}
+
+/** The text of every <tag>...</tag> in the XML, child tags left out, as ExcelJS joins the text it is given. */
+function* texts(xml: string, tag: string): Generator<string> {
+  const close = new RegExp(`</(?:\\w+:)?${tag}\\s*>`, "g");
+  let after = 0;
+  for (const t of tags(xml, tag)) {
+    if (t.end < after || t.attributes.endsWith("/")) continue;
+    close.lastIndex = t.end + 1;
+    const c = close.exec(xml);
+    if (!c) return;
+    yield xml.slice(t.end + 1, c.index).replace(/<[^<>]*>/g, "");
+    after = close.lastIndex;
+  }
+}
+
+function checkRanges(_name: string, content: Buffer): void {
+  // Every part, whatever its name: ExcelJS drops a leading "/" and matches sheet names anywhere in the path, and JSZip can
+  // take a name from an extra field, so the name says nothing reliable. Comments, CDATA and processing instructions go
+  // first, as ExcelJS's parser passes over them: text around a comment is joined, and CDATA is not read at all. One left
+  // open runs to the end, so a file of many unclosed ones is still read once, not once per opening.
+  const xml = content.toString("utf8").replace(/<!--[\s\S]*?(?:-->|$)|<!\[CDATA\[[\s\S]*?(?:\]\]>|$)|<\?[\s\S]*?(?:\?>|$)/g, "");
+  let merged = 0;
+  for (const ref of attributes(xml, "mergeCell", "ref")) merged += cellsOf(ref);
+  if (merged > MAX_MERGED_CELLS) {
+    throw new HttpError(413, `The XLSX file merges ${merged} cells; more than ${MAX_MERGED_CELLS} are not read. Unmerge them or save the sheet as CSV`);
+  }
+  let validated = 0;
+  for (const sqref of attributes(xml, "dataValidation", "sqref")) for (const ref of sqref.split(/\s+/)) if (ref) validated += ref.includes(":") ? cellsOf(ref) : 1;
+  if (validated > MAX_VALIDATED_CELLS) {
+    throw new HttpError(413, `The XLSX file has data validation on ${validated} cells; more than ${MAX_VALIDATED_CELLS} are not read. Remove it or save the sheet as CSV`);
+  }
+  // ExcelJS makes a column object for every column up to the largest min and max, read with parseInt as here.
+  for (const bound of [...attributes(xml, "col", "min"), ...attributes(xml, "col", "max")]) {
+    const n = parseInt(bound, 10);
+    if (n > MAX_COLUMN) throw badRequest(`The XLSX file describes column ${n}; a sheet has ${MAX_COLUMN} columns`);
+  }
+  let named = 0;
+  for (const text of texts(xml, "definedName")) for (const ref of decodeXml(text).split(",")) named += cellsOf(ref);
+  if (named > MAX_NAMED_CELLS) {
+    throw new HttpError(413, `The XLSX file's defined names cover ${named} cells; more than ${MAX_NAMED_CELLS} are not read. Delete the names or save the sheet as CSV`);
   }
 }
 
