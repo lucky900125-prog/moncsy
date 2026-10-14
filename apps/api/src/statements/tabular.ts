@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { StatementMapping, StatementRole, StatementTx } from "@et/shared";
 import { badRequest } from "../errors.js";
 import { categorize } from "../revolut/categorize.js";
+import { assertStatementRows } from "./limits.js";
 import { currencyFrom, detectDateOrder, detectDecimal, fold, parseAmount, parseStatementDate } from "./values.js";
 
 export type Cell = string | number | Date | null;
@@ -217,6 +218,9 @@ export function parseTabular(rows: Cell[][], opts: TabularOptions): TabularResul
     .map((r, i) => ({ r, line: i + 1 }))
     .slice(headerIsData ? headerIdx : headerIdx + 1)
     .filter(({ r }) => r.some((c) => c != null && String(c).trim() !== ""));
+  // Every row of the body ends up a transaction, an ignored row or an error, so this is the count the preview is refused
+  // by, known before any row is read.
+  assertStatementRows(body.length);
   const col = (role: StatementRole) => (idx[role] === undefined ? [] : body.map(({ r }) => r[idx[role]!]));
 
   const decimal = detectDecimal([...col("amount"), ...col("debit"), ...col("credit")]);

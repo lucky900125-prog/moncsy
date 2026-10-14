@@ -2,6 +2,7 @@ import { XMLParser } from "fast-xml-parser";
 import type { StatementTx } from "@et/shared";
 import { badRequest } from "../errors.js";
 import { categorize } from "../revolut/categorize.js";
+import { assertStatementRows } from "./limits.js";
 import { rowExternalId } from "./tabular.js";
 import { parseAmount, parseStatementDate } from "./values.js";
 
@@ -53,6 +54,8 @@ export function parseCamt(xml: string, timeZone: string): FormatResult {
     ...arr(root?.BkToCstmrDbtCdtNtfctn?.Ntfctn),
   ] as Record<string, any>[];
   if (!reports.length) throw badRequest("Not an ISO 20022 camt.052/053/054 statement (no Stmt, Rpt or Ntfctn element)");
+  // Each entry is a transaction, an ignored one or an error: refused by the count before any is read.
+  assertStatementRows(reports.reduce((n, rep) => n + arr(rep.Ntry).length, 0));
   const res: FormatResult = { currency: null, transactions: [], ignored: 0, errors: [] };
   const seen = new Map<string, number>();
   for (const rep of reports) {
@@ -132,6 +135,7 @@ export function parseOfx(text: string, timeZone: string): FormatResult {
   );
   const blocks = found.map((m, i) => ({ body: m[1]!, currency: currencies[i] ?? null }));
   if (!blocks.length) throw badRequest("No <STMTTRN> transactions found in the OFX file");
+  assertStatementRows(blocks.length);
   const res: FormatResult = { currency: curdefs[0]?.ccy ?? null, transactions: [], ignored: 0, errors: [] };
   const seen = new Map<string, number>();
   blocks.forEach(({ body: b, currency }, i) => {
@@ -174,7 +178,9 @@ export function parseMt940(text: string, timeZone: string): FormatResult {
     tag: m[1]!,
     value: m[2]!.trim(),
   }));
-  if (!fields.some((f) => f.tag === "61")) throw badRequest("No :61: booking lines found in the MT940 file");
+  const bookings = fields.filter((f) => f.tag === "61").length;
+  if (!bookings) throw badRequest("No :61: booking lines found in the MT940 file");
+  assertStatementRows(bookings);
   const res: FormatResult = { currency: null, transactions: [], ignored: 0, errors: [] };
   const seen = new Map<string, number>();
   let currency: string | null = null;

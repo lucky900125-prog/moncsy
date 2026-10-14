@@ -118,6 +118,8 @@ function normalizeRecords(records: Record<string, unknown>[], keys: string[]): {
       `Not a Revolut statement: missing column(s) ${missing.map((m) => HEADER_ALIASES[m][0]).join(", ")}. Found: ${keys.join(", ")}`,
     );
   }
+  // Each record becomes a row or an error, and each row a transaction or an ignored one: refused by the count before any is read.
+  assertStatementRows(records.length);
   const rows: StatementRow[] = [];
   const errors: string[] = [];
   records.forEach((r, i) => {
