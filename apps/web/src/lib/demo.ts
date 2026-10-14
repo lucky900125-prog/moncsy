@@ -279,17 +279,21 @@ function demoProductAnalysis(tx: Transaction[], question?: string, filter?: Prod
   const named = filtered.filter((p) => (p.brand && q.includes(low(p.brand))) || q.includes(low(p.product)));
   const stats = named.length ? named : filtered;
   if (stats.length === 0) throw new Error("Ebben az időszakban még nincs blokktétel. Olvass be blokkokat, hogy össze lehessen hasonlítani az árakat.");
-  const compared = stats.filter((p) => p.cheapest);
+  const compared = stats.filter((p) => p.stores.length >= 2);
   const best = rankStores(stats)[0];
   const fmt = (n: number) => `${Math.round(n).toLocaleString("hu-HU")} Ft`;
   const unit = (u: string | null) => (u ? `/${u}` : "/db");
   return {
     provider: "demo",
     model: "helyi szabályok",
-    summary: best
+    summary: best?.cheapestFor
       ? `${compared.length} terméket vettél több boltban; ${best.cheapestFor} esetben a ${best.store} volt a legolcsóbb. Ez demó elemzés, valódi AI nélkül.`
-      : "Még nincs olyan termék, amit több boltban is megvettél. Ez demó elemzés, valódi AI nélkül.",
-    insights: [...compared]
+      : compared.length
+        ? `${compared.length} terméket vettél több boltban, mindegyiket egyforma legjobb áron. Ez demó elemzés, valódi AI nélkül.`
+        : "Még nincs olyan termék, amit több boltban is megvettél. Ez demó elemzés, valódi AI nélkül.",
+    // Equal best prices name no store (cheapest is null then), like the server's offline analysis.
+    insights: compared
+      .filter((p) => p.cheapest)
       .sort((a, b) => (b.saving ?? 0) - (a.saving ?? 0))
       .slice(0, 6)
       .map((p) => {

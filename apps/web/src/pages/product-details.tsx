@@ -21,6 +21,8 @@ const ALL_BRANDS = "__all";
 
 const unitLabel = (p: ProductStat) => (p.baseUnit ? `/${p.baseUnit}` : "/db");
 const priceOf = (p: ProductStat, s: StorePrice) => (p.baseUnit ? (s.avgBasePrice ?? s.avgUnitPrice) : s.avgUnitPrice);
+/** Stores sharing the lowest price; cheapest is null when there are two or more of them. */
+const tiedAtBest = (p: ProductStat) => p.stores.filter((s) => priceOf(p, s) === priceOf(p, p.stores[0]!)).map((s) => s.store);
 const productLabel = (p: ProductStat) => `${p.brand ? `${p.brand} ` : ""}${p.product}${p.pack ? ` (${p.pack})` : ""}`;
 
 function rangeStart(r: DetailRange) {
@@ -258,13 +260,14 @@ function ProductRow({ p, open, onToggle, onAsk, busy, delay }: { p: ProductStat;
           </div>
           <div className="mt-0.5 text-xs text-muted-foreground">
             {p.purchases} vásárlás ·{" "}
-            {p.cheapest ? (
+            {p.stores.length === 1 ? (
+              <>csak itt: {cheapest.store}</>
+            ) : (
               <>
-                legolcsóbb: <span className="text-positive">{p.cheapest}</span>, {money(priceOf(p, cheapest), p.currency)}{unitLabel(p)}
+                {p.cheapest ? <>legolcsóbb: <span className="text-positive">{p.cheapest}</span></> : <>legolcsóbb egyforma áron: {tiedAtBest(p).join(", ")}</>}
+                , {money(priceOf(p, cheapest), p.currency)}{unitLabel(p)}
                 {p.saving ? <> (−{money(p.saving, p.currency)}{unitLabel(p)})</> : null}
               </>
-            ) : (
-              <>csak itt: {cheapest.store}</>
             )}
           </div>
         </div>

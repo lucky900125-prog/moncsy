@@ -19,6 +19,8 @@ const RANGES: { value: Range; label: string }[] = [
 
 const unitLabel = (p: ProductStat) => (p.baseUnit ? `/${p.baseUnit}` : "/db");
 const priceOf = (p: ProductStat, s: StorePrice) => (p.baseUnit ? (s.avgBasePrice ?? s.avgUnitPrice) : s.avgUnitPrice);
+/** Stores sharing the lowest price; cheapest is null when there are two or more of them. */
+const tiedAtBest = (p: ProductStat) => p.stores.filter((s) => priceOf(p, s) === priceOf(p, p.stores[0]!)).map((s) => s.store);
 const productLabel = (p: ProductStat) => `${p.brand ? `${p.brand} ` : ""}${p.product}${p.pack ? ` (${p.pack})` : ""}`;
 const shortDate = (iso: string) => format(new Date(iso), "MMM d.", { locale: hu });
 const rangeStart = (r: Range) => (r === "all" ? null : r === "this" ? startOfMonth(new Date()) : startOfMonth(subMonths(new Date(), 2)));
@@ -230,7 +232,10 @@ function ProductRow({ p, open, onToggle, onAsk, busy }: { p: ProductStat; open: 
             {p.pack ? <Text className="text-xs text-muted-fg dark:text-muted-fg-dark">{p.pack}</Text> : null}
           </View>
           <Text className="text-xs text-muted-fg dark:text-muted-fg-dark">
-            {p.purchases} vásárlás · {p.cheapest ? `legolcsóbb: ${p.cheapest}, ${money(priceOf(p, cheapest), p.currency)}${unitLabel(p)}` : `csak itt: ${cheapest.store}`}
+            {p.purchases} vásárlás ·{" "}
+            {p.stores.length === 1
+              ? `csak itt: ${cheapest.store}`
+              : `${p.cheapest ? `legolcsóbb: ${p.cheapest}` : `legolcsóbb egyforma áron: ${tiedAtBest(p).join(", ")}`}, ${money(priceOf(p, cheapest), p.currency)}${unitLabel(p)}`}
           </Text>
         </View>
         <Text className="text-sm text-fg dark:text-fg-dark">{money(p.spent, p.currency)}</Text>
