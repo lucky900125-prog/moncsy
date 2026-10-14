@@ -1,11 +1,17 @@
 import { crc32, deflateRawSync, inflateRawSync } from "node:zlib";
 import ExcelJS from "exceljs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MockProvider } from "../src/ai/index.js";
-import { MAX_XLSX_UNPACKED_BYTES } from "../src/io/xlsx.js";
+import { MAX_XLSX_UNPACKED_BYTES, readWorkbook } from "../src/io/xlsx.js";
 import { UnpackedTooLargeError, assertUnpackedSize } from "../src/io/zip.js";
 import { parseStatementFile } from "../src/statements/index.js";
 import { multipart, testApp } from "./helpers.js";
+
+// Counts inflating on this thread: the reading thread loads node:zlib for itself, so its calls are not seen here.
+vi.mock("node:zlib", async (importOriginal) => {
+  const real = await importOriginal<typeof import("node:zlib")>();
+  return { ...real, inflateRawSync: vi.fn(real.inflateRawSync) };
+});
 
 /**
  * A ZIP archive of deflated entries: local headers, then the central directory, then its end record. An entry may carry
@@ -232,6 +238,23 @@ describe("uploaded XLSX limits", () => {
     expect((await app.inject("/api/health")).statusCode).toBe(200);
     expect((await parse(await statementWorkbook(() => {}))).transactions).toHaveLength(50);
     await app.close();
+  });
+
+  it("leaves unpacking and checking an upload to the reading thread, and answers as before", async () => {
+    const cases: [string, Buffer, RegExp | number][] = [
+      ["a readable workbook", await statementWorkbook(() => {}), 51],
+      ["a merge over the whole sheet", await rewritten(SHEET, merge(WHOLE)), MERGES],
+      ["a column past the sheet's end", await rewritten(SHEET, (x) => x.replace("<sheetData>", '<cols><col min="1" max="50000000"/></cols><sheetData>')), /^The XLSX file describes column 50000000; a sheet has 16384 columns$/],
+      ["a ZIP bomb", bomb(), /^The XLSX file unpacks to more than 20 MB; split it into smaller files$/],
+      ["a file that is not a ZIP", Buffer.from("PK not really"), /^Not a readable XLSX file: no ZIP directory$/],
+    ];
+    for (const [what, data, expected] of cases) {
+      vi.mocked(inflateRawSync).mockClear();
+      const read = readWorkbook(data, "Not a readable XLSX file");
+      if (typeof expected === "number") expect((await read)[0]!.rows, what).toHaveLength(expected);
+      else await expect(read, what).rejects.toThrow(expected);
+      expect(vi.mocked(inflateRawSync), what).not.toHaveBeenCalled();
+    }
   });
 
   it("refuses a value beyond the row or column limit instead of building arrays that long", async () => {
