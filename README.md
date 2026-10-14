@@ -18,6 +18,8 @@ pnpm --filter @et/mobile start
 
 Ha az API nem érhető el, a web „Demó mód”-ban fut böngészőben tárolt mintaadatokkal.
 
+A `pnpm-workspace.yaml` csak az ott felsorolt függőségek telepítő-szkriptjét engedi futni, és egy napnál frissebb csomagverziót nem old fel. Ha egy régebbi telepítés után a `pnpm install` `ERR_PNPM_IGNORED_BUILDS` hibával áll meg, töröld egyszer a `node_modules` mappákat (`rm -rf node_modules apps/*/node_modules packages/*/node_modules`), és telepíts újra.
+
 ## Élő demó
 
 A `main` minden pusha után a GitHub Actions kiteszi a webappot GitHub Pages-re: https://lucky900125-prog.github.io/moncsy/ .
