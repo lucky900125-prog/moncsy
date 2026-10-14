@@ -1,6 +1,7 @@
 import type { AnalyzeResponse, Category, PackUnit, ReceiptItem, Transaction } from "@et/shared";
 import { buildProductStats, rankStores } from "@et/shared/products";
 import type { Backend, TxQuery } from "./backend";
+import { demoParseStatement } from "./demo-statement";
 import { uid } from "./utils";
 
 /** Local, offline backend used when the API is not reachable. Data lives in localStorage. */
@@ -248,8 +249,18 @@ export const demoBackend: Backend = {
   revolutSync: () => notInDemo("A Revolut szinkron"),
   revolutImportStatement: () => notInDemo("A Revolut kivonat importálása"),
   importFile: () => notInDemo("Az XLSX/XML import"),
-  parseStatement: () => notInDemo("A bankkivonat beolvasása"),
-  importStatement: () => notInDemo("A bankkivonat importálása"),
+  async parseStatement(_file, opts) {
+    await sleep(700);
+    return demoParseStatement(opts);
+  },
+  async importStatement(rows) {
+    const d = getDb();
+    const known = new Set(d.transactions.map((t) => t.externalId).filter(Boolean));
+    const fresh = rows.filter((r) => !known.has(r.externalId));
+    d.transactions = [...fresh.map((r) => ({ ...r, id: uid() })), ...d.transactions].sort((a, b) => b.date.localeCompare(a.date));
+    save(d);
+    return { imported: fresh.length, skipped: rows.length - fresh.length, errors: [] };
+  },
   exportFile: () => notInDemo("Az XLSX/XML export"),
 };
 

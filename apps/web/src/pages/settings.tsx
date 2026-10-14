@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Download, Upload, RefreshCw, Landmark, FileUp, Server, RotateCcw, Eye, EyeOff, KeyRound } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Download, Upload, RefreshCw, Landmark, FileUp, Server, RotateCcw, Eye, EyeOff, KeyRound, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import type { RevolutStatus } from "@et/shared";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -125,12 +126,23 @@ export function SettingsPage() {
       <Card>
         <CardHeader><CardTitle>Import és export</CardTitle></CardHeader>
         <CardContent className="flex flex-col gap-3">
+          <Link
+            to="/beallitasok/kivonat"
+            className="flex items-center gap-3 rounded-lg border bg-card p-3 transition-colors duration-200 hover:bg-muted/60"
+          >
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-accent text-accent-foreground"><FileUp className="size-4" /></span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-medium">Bankkivonat importálása</span>
+              <span className="block text-xs text-muted-foreground">Bármelyik bank: CSV, Excel, CAMT XML, OFX, MT940, PDF. Oszlopok és előnézet mentés előtt.</span>
+            </span>
+            <ChevronRight className="size-4 text-muted-foreground" />
+          </Link>
           <div className="flex flex-wrap gap-2">
             <Button variant="outline" onClick={() => exportAs("xlsx")} disabled={!!busy}><Download /> Export XLSX</Button>
             <Button variant="outline" onClick={() => exportAs("xml")} disabled={!!busy}><Download /> Export XML</Button>
-            <Button variant="outline" onClick={() => importRef.current?.click()} disabled={!!busy}><Upload /> Import (XLSX / XML)</Button>
+            <Button variant="outline" onClick={() => importRef.current?.click()} disabled={!!busy}><Upload /> Import moncsy exportból</Button>
           </div>
-          <p className="text-xs text-muted-foreground">Az import a már meglévő tételeket kihagyja, a hibás sorokat külön jelzi.</p>
+          <p className="text-xs text-muted-foreground">A moncsy saját XLSX/XML exportját tölti vissza. A már meglévő tételeket kihagyja, a hibás sorokat külön jelzi.</p>
           <input ref={importRef} type="file" accept=".xlsx,.xml" className="hidden" onChange={(e) => { importFile(e.target.files?.[0]); e.target.value = ""; }} />
         </CardContent>
       </Card>

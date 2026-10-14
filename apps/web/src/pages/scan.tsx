@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { CategoryBadgeIcon } from "@/components/category-dot";
+import { ReceiptItems } from "@/components/receipt-items";
 import { useApp, useCategoryMap } from "@/store/app";
 import { useUi } from "@/store/ui";
 import { money, shortDate } from "@/lib/format";
@@ -167,14 +168,7 @@ export function ScanPage() {
                 </div>
 
                 {result.items.length > 0 && (
-                  <ul className="divide-y rounded-lg border text-sm">
-                    {result.items.map((it, i) => (
-                      <li key={i} className="flex justify-between gap-3 px-3 py-2">
-                        <span className="truncate">{it.quantity > 1 ? `${it.quantity}× ` : ""}{it.name}</span>
-                        <span className="tabular-nums text-muted-foreground">{money(it.total, result.currency ?? "HUF")}</span>
-                      </li>
-                    ))}
-                  </ul>
+                  <ReceiptItems items={result.items} currency={result.currency ?? "HUF"} />
                 )}
 
                 <div className="flex items-baseline justify-between">

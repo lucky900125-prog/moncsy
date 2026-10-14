@@ -8,6 +8,7 @@ import { ScanPage } from "@/pages/scan";
 import { InsightsPage } from "@/pages/insights";
 import { CategoriesPage } from "@/pages/categories";
 import { SettingsPage } from "@/pages/settings";
+import { StatementImportPage } from "@/pages/statement-import";
 import { useApp } from "@/store/app";
 
 export default function App() {
@@ -27,6 +28,7 @@ export default function App() {
           <Route path="elemzes/reszletek" element={<InsightsPage tab="details" />} />
           <Route path="kategoriak" element={<CategoriesPage />} />
           <Route path="beallitasok" element={<SettingsPage />} />
+          <Route path="beallitasok/kivonat" element={<StatementImportPage />} />
         </Route>
       </Routes>
       <Toaster

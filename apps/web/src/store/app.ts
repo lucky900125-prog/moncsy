@@ -9,6 +9,8 @@ interface AppState {
   status: Status;
   error: string | null;
   backend: Backend | null;
+  /** a saved API address is taking long to answer (free-tier server starting up) */
+  waking: boolean;
   categories: Category[];
   transactions: Transaction[];
   init(): Promise<void>;
@@ -33,12 +35,14 @@ export const useApp = create<AppState>((set, get) => {
     status: "loading",
     error: null,
     backend: null,
+    waking: false,
     categories: [],
     transactions: [],
     async init() {
-      const backend = await detectBackend();
-      set({ backend });
-      await get().refresh();
+      const { backend, error } = await detectBackend(() => set({ waking: true }));
+      set({ backend, waking: false });
+      if (error) set({ status: "error", error });
+      else await get().refresh();
     },
     async refresh() {
       try {

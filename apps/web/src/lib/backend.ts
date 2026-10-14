@@ -130,15 +130,41 @@ export const apiBackend: Backend = {
   },
 };
 
-/** Uses the real API when /api/health answers, otherwise the local demo backend. */
-export async function detectBackend(): Promise<Backend> {
+export type Detection = { backend: Backend; error?: string };
+
+const WAKE_TIMEOUT_MS = 90_000;
+
+/**
+ * Picks the backend. Without a saved API address it probes the same origin briefly and falls back to the local demo.
+ * With a saved address it never falls back: a sleeping free-tier server takes about a minute to start, so it waits
+ * (calling onSlow after 1.5 s so the UI can say the server is waking) and reports an error if the API stays unreachable.
+ */
+export async function detectBackend(onSlow?: () => void): Promise<Detection> {
+  const configured = getApiUrlSetting().trim() !== "";
+  const ctrl = new AbortController();
+  const abort = setTimeout(() => ctrl.abort(), configured ? WAKE_TIMEOUT_MS : 1500);
+  const slow = configured && onSlow ? setTimeout(onSlow, 1500) : undefined;
   try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 1500);
     const res = await fetch(getApiBase() + "/health", withAuth({ signal: ctrl.signal }));
-    clearTimeout(t);
-    // 401 still means the API is there: stay on it so a missing or wrong token shows up as an error, not as demo data.
-    if (res.status === 401 || (res.ok && (res.headers.get("content-type") ?? "").includes("json"))) return apiBackend;
-  } catch { /* unreachable: fall through to demo, surfaced in the UI as "Demó mód" */ }
-  return demoBackend;
+    if (res.status === 401) return { backend: apiBackend, error: (await errorFrom(res)).message };
+    if (res.ok && (res.headers.get("content-type") ?? "").includes("json")) {
+      // /health is public; it only lists "ai" when the request carried the right token.
+      const body = (await res.json()) as { auth?: "token" | "none"; ai?: unknown };
+      if (body.auth === "token" && !body.ai) {
+        return { backend: apiBackend, error: getApiToken() ? "Az API elutasította a tokent. Ellenőrizd a Beállítások / Kapcsolat alatt." : "Az API tokent kér. Add meg a Beállítások / Kapcsolat alatt." };
+      }
+      return { backend: apiBackend };
+    }
+    if (configured) return { backend: apiBackend, error: `Az API (${getApiBase()}) nem a várt választ adta: ${res.status} ${res.statusText}` };
+  } catch (e) {
+    if (configured) {
+      const why = (e as Error).name === "AbortError" ? `${WAKE_TIMEOUT_MS / 1000} másodperc alatt sem válaszolt` : (e as Error).message;
+      return { backend: apiBackend, error: `Az API (${getApiBase()}) nem érhető el: ${why}` };
+    }
+    /* no address saved and nothing on this origin: demo mode, shown in the UI as "Demó mód" */
+  } finally {
+    clearTimeout(abort);
+    clearTimeout(slow);
+  }
+  return { backend: demoBackend };
 }
