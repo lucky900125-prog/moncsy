@@ -4,3 +4,29 @@ dist
 .env
 .DS_Store
 *.tsbuildinfo
+
+# The repository is public, and these hold bank data, keys or the database (architect's CI-03).
+# Already-tracked files are not affected; a fixture that must be committed is added by name with !path, never by folder.
+.env.*
+!.env.example
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite*
+*.enc
+*.key
+*.pem
+*.p12
+*[Tt][Oo][Kk][Ee][Nn]*.txt
+*[Kk][Ee][Yy].txt
+expenses-*.*
+moncsy-export-*.*
+*.csv
+*.xlsx
+*.xls
+*.xml
+*.ofx
+*.qif
+*.sta
+*.mt940
+*.pdf
