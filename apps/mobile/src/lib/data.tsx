@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Category, Transaction } from "@et/shared";
 import { api } from "./api";
 
@@ -22,17 +22,24 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [categories, setCategories] = useState<Category[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
 
+  const latest = useRef(0);
+
+  // The newest refresh owns the state: a slower earlier one (the first load still running when pull-to-refresh or a
+  // new API address in Settings starts another) must not overwrite its answer or end its loading state.
   const refresh = useCallback(async () => {
+    const id = ++latest.current;
     setLoading(true);
     try {
       const [c, t] = await Promise.all([api.categories(), api.transactions()]);
+      if (id !== latest.current) return;
       setCategories(c);
       setTransactions(sortTx(t));
       setError(null);
     } catch (e) {
+      if (id !== latest.current) return;
       setError((e as Error).message);
     } finally {
-      setLoading(false);
+      if (id === latest.current) setLoading(false);
     }
   }, []);
 

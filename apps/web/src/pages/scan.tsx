@@ -14,6 +14,15 @@ import { cn } from "@/lib/utils";
 
 type Phase = "idle" | "scanning" | "done" | "error";
 
+/**
+ * The API gives the receipt's day as YYYY-MM-DD, which new Date() reads as UTC midnight: 02:00 in Budapest and the
+ * previous day west of UTC. Noon local time keeps the printed day. A full date-time (the demo) is used as it is.
+ */
+function receiptDate(d: string) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
+  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12) : new Date(d);
+}
+
 export function ScanPage() {
   const backend = useApp((s) => s.backend);
   const cats = useCategoryMap();
@@ -25,12 +34,15 @@ export function ScanPage() {
   const [result, setResult] = useState<ReceiptScanResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const reqId = useRef(0);
 
   // Release the preview blob URL whenever it is replaced, cleared, or the page unmounts.
   useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
 
   async function handle(file: File | undefined) {
     if (!file || !backend) return;
+    // A newer file (or Újra) supersedes this scan, so its result never lands under another receipt's photo.
+    const id = ++reqId.current;
     setError(null);
     setResult(null);
     setPreview(file.type.startsWith("image/") ? URL.createObjectURL(file) : null);
@@ -38,15 +50,18 @@ export function ScanPage() {
     try {
       const small = await shrinkImage(file);
       const r = await backend.scanReceipt(small);
+      if (id !== reqId.current) return;
       setResult(r);
       setPhase("done");
     } catch (e) {
+      if (id !== reqId.current) return;
       setError((e as Error).message);
       setPhase("error");
     }
   }
 
   function reset() {
+    reqId.current++;
     setPreview(null);
     setResult(null);
     setError(null);
@@ -59,7 +74,7 @@ export function ScanPage() {
       amount: result.total ? -Math.abs(result.total) : undefined,
       currency: result.currency ?? "HUF",
       merchant: result.merchant ?? "",
-      date: result.date ?? new Date().toISOString(),
+      date: (result.date ? receiptDate(result.date) : new Date()).toISOString(),
       categoryId: result.suggestedCategoryId,
       items: result.items,
       source: "receipt",
@@ -158,7 +173,7 @@ export function ScanPage() {
                     <div>
                       <div className="font-medium">{result.merchant ?? "Ismeretlen kereskedő"}</div>
                       <div className="text-xs text-muted-foreground">
-                        {result.date ? shortDate(result.date) : "Dátum nem olvasható"} · {suggested?.name ?? "Kategória javaslat nélkül"}
+                        {result.date ? shortDate(receiptDate(result.date).toISOString()) : "Dátum nem olvasható"} · {suggested?.name ?? "Kategória javaslat nélkül"}
                       </div>
                     </div>
                   </div>

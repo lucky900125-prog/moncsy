@@ -39,20 +39,57 @@ const MORE_ROLES: { role: StatementRole; label: string }[] = [
 const NONE = "__none";
 const PREVIEW_ROWS = 60;
 
-/** The user's own mapping for a bank's column layout, so the next statement from the same bank maps itself. */
-const mappingKey = (columns: string[]) => `moncsy-stmt-mapping:${columns.join("|")}`;
-function loadMapping(columns: string[]): StatementMapping | null {
+/*
+ * The user's own mapping for a bank's column layout, so the next statement from the same bank maps itself.
+ * For a file without a header row the "columns" are its first transaction (date, amount, partner, IBAN), so nothing
+ * readable is stored: the key is a SHA-256 of the columns and the value holds column positions, not names.
+ * crypto.subtle needs https or localhost; elsewhere the mapping is not remembered.
+ */
+const MAPPING_PREFIX = "moncsy-stmt-mapping:";
+/** role -> column position; -1 means the role has no column */
+type StoredMapping = Partial<Record<StatementRole, number>>;
+
+async function mappingKey(columns: string[]) {
+  if (!globalThis.crypto?.subtle) return null;
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(columns)));
+  return MAPPING_PREFIX + [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function loadMapping(columns: string[]): Promise<StatementMapping | null> {
   try {
-    const raw = localStorage.getItem(mappingKey(columns));
-    return raw ? (JSON.parse(raw) as StatementMapping) : null;
+    const key = await mappingKey(columns);
+    const raw = key && localStorage.getItem(key);
+    if (!raw) return null;
+    const m: StatementMapping = {};
+    for (const [role, i] of Object.entries(JSON.parse(raw) as StoredMapping) as [StatementRole, number][]) {
+      if (i === -1) m[role] = "";
+      else if (Number.isInteger(i) && columns[i] !== undefined) m[role] = columns[i];
+    }
+    return m;
   } catch {
     return null; // blocked storage or a corrupted entry: fall back to the server's detection
   }
 }
-function storeMapping(columns: string[], m: StatementMapping) {
+
+async function storeMapping(columns: string[], m: StatementMapping) {
+  const stored: StoredMapping = {};
+  for (const [role, col] of Object.entries(m) as [StatementRole, string | undefined][]) {
+    if (col === "") stored[role] = -1;
+    else if (col !== undefined && columns.includes(col)) stored[role] = columns.indexOf(col);
+  }
   try {
-    localStorage.setItem(mappingKey(columns), JSON.stringify(m));
+    const key = await mappingKey(columns);
+    if (key) localStorage.setItem(key, JSON.stringify(stored));
   } catch { /* blocked storage: the mapping just is not remembered */ }
+}
+
+/** Entries saved before the key was hashed name the columns, which for a file without a header are statement data. */
+function dropReadableMappings() {
+  try {
+    for (const k of Object.keys(localStorage)) {
+      if (k.startsWith(MAPPING_PREFIX) && !/^[0-9a-f]{64}$/.test(k.slice(MAPPING_PREFIX.length))) localStorage.removeItem(k);
+    }
+  } catch { /* blocked storage: nothing was stored either */ }
 }
 
 type Phase = "idle" | "reading" | "preview" | "importing" | "done";
@@ -87,7 +124,8 @@ export function StatementImportPage() {
       if (id !== reqId.current) return; // a newer read (e.g. another mapping change) superseded this one
       // First read of a known layout: apply the mapping the user chose last time for it.
       if (!mapping && !opts.remembered && p.columns.length) {
-        const saved = loadMapping(p.columns);
+        const saved = await loadMapping(p.columns);
+        if (id !== reqId.current) return;
         if (saved && JSON.stringify(saved) !== JSON.stringify(p.mapping)) return read(f, saved, { remembered: true });
       }
       setPreview(p);
@@ -113,7 +151,6 @@ export function StatementImportPage() {
     if (!preview || !file) return;
     // "" tells the server this role has no column, so auto-detection does not fill it back in.
     const next: StatementMapping = { ...preview.mapping, [role]: col === NONE ? "" : col };
-    storeMapping(preview.columns, next);
     void read(file, next, { remembered: true });
   }
 
@@ -140,13 +177,18 @@ export function StatementImportPage() {
   }, [selected]);
 
   async function doImport() {
-    if (!backend || selected.length === 0) return;
+    if (!backend || !preview || selected.length === 0) return;
     setPhase("importing");
     try {
       const r = await backend.importStatement(selected);
+      // Remembered only once a statement was imported with it, so a wrong try is not applied to the next file.
+      if (preview.columns.length) void storeMapping(preview.columns, preview.mapping);
       setResult(r);
       setPhase("done");
-      toast.success(`${r.imported} tétel importálva`, { description: r.skipped ? `${r.skipped} már megvolt, kihagyva` : undefined });
+      const description = r.skipped ? `${r.skipped} már megvolt, kihagyva` : undefined;
+      if (r.imported > 0) toast.success(`${r.imported} tétel importálva`, { description });
+      else if (r.errors?.length) toast.warning("Egy tétel sem került be", { description });
+      else toast("Nem volt új tétel", { description });
       await refresh();
     } catch (e) {
       setError((e as Error).message);
@@ -156,6 +198,7 @@ export function StatementImportPage() {
 
   // Leaving with a parsed but unimported statement is fine; nothing was saved. Cancel late responses though.
   useEffect(() => () => { reqId.current++; }, []);
+  useEffect(dropReadableMappings, []);
 
   const toggle = (id: string) =>
     setExcluded((s) => {
@@ -191,9 +234,13 @@ export function StatementImportPage() {
 
       {phase === "done" && result ? (
         <Card className="flex animate-rise-in flex-col items-start gap-3 p-6">
-          <div className="flex size-11 items-center justify-center rounded-2xl bg-accent text-accent-foreground"><Check className="size-5" /></div>
+          {result.imported > 0 ? (
+            <div className="flex size-11 items-center justify-center rounded-2xl bg-accent text-accent-foreground"><Check className="size-5" /></div>
+          ) : (
+            <div className="flex size-11 items-center justify-center rounded-2xl bg-muted text-muted-foreground"><AlertCircle className="size-5" /></div>
+          )}
           <div>
-            <p className="font-medium">{result.imported} tétel importálva</p>
+            <p className="font-medium">{result.imported > 0 ? `${result.imported} tétel importálva` : result.errors?.length ? "Egy tétel sem került be" : "Nem volt új tétel"}</p>
             <p className="mt-1 text-sm text-muted-foreground">
               {result.skipped ? `${result.skipped} már szerepelt korábbról, ezeket kihagytam. ` : ""}
               {result.errors?.length ? `${result.errors.length} sort a szerver elutasított.` : ""}

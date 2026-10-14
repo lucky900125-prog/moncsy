@@ -43,7 +43,14 @@ export function TransactionSheet() {
   }, [open, draft]);
 
   const editing = Boolean(draft?.id);
-  const visibleCats = categories.filter((c) => (kind === "income" ? c.id === "income" || c.isCustom : c.id !== "income"));
+  const catsFor = (k: Kind) => categories.filter((c) => (k === "income" ? c.id === "income" || c.isCustom : c.id !== "income"));
+  const visibleCats = catsFor(kind);
+
+  // Switching between Kiadás and Bevétel drops a category the other list does not show, so it is not saved unseen.
+  function switchKind(k: Kind) {
+    setKind(k);
+    if (categoryId && !catsFor(k).some((c) => c.id === categoryId)) setCategoryId(null);
+  }
   const parsed = Number(amount.replace(/\s/g, "").replace(",", "."));
   const when = new Date(date);
   const dateValid = date !== "" && !Number.isNaN(when.getTime());
@@ -98,7 +105,7 @@ export function TransactionSheet() {
         <form onSubmit={submit} className="flex flex-col gap-5 pt-2">
           <Segmented
             value={kind}
-            onChange={setKind}
+            onChange={switchKind}
             options={[
               { value: "expense", label: "Kiadás" },
               { value: "income", label: "Bevétel" },
