@@ -21,6 +21,8 @@ export interface AppConfig {
     apiKey: string | undefined;
     baseUrl: string | undefined;
     anthropicFallbacks: boolean;
+    /** AI calls allowed per UTC day; 0 turns the AI off */
+    dailyLimit: number;
   };
   revolut: {
     mode: RevolutMode;
@@ -64,6 +66,14 @@ function pickProxyHops(env: NodeJS.ProcessEnv): number {
   return hops;
 }
 
+function pickAIDailyLimit(env: NodeJS.ProcessEnv): number {
+  const raw = env.AI_DAILY_LIMIT?.trim();
+  if (!raw) return 100;
+  const limit = Number(raw);
+  if (!Number.isSafeInteger(limit) || limit < 0) throw new Error(`Invalid AI_DAILY_LIMIT "${raw}" (expected a whole number of AI calls a day, 0 or more)`);
+  return limit;
+}
+
 const LOOPBACK = new Set(["127.0.0.1", "::1", "localhost"]);
 
 /**
@@ -99,6 +109,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       apiKey: apiKey || undefined,
       baseUrl: env.AI_BASE_URL || undefined,
       anthropicFallbacks: (env.ANTHROPIC_FALLBACKS || "on").toLowerCase() !== "off",
+      dailyLimit: pickAIDailyLimit(env),
     },
     revolut: {
       mode: pickRevolutMode(env),
