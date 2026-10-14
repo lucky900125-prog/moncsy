@@ -4,9 +4,9 @@ import type { StatementFormat, StatementMapping, StatementPreview, StatementTx }
 import type { AIProvider } from "../ai/index.js";
 import { HttpError, badRequest } from "../errors.js";
 import { decodeText, detectDelimiter, utf16Encoding } from "../io/text.js";
-import { cellValue, loadWorkbook } from "../io/xlsx.js";
+import { busiestSheet, cellValue, readWorkbook, type SheetCell } from "../io/xlsx.js";
 import type { Repository } from "../repository.js";
-import { parseStatementCsv, parseStatementXlsx, toTransactions } from "../revolut/csv.js";
+import { parseStatementCsv, parseStatementSheet, toTransactions } from "../revolut/csv.js";
 import { isoDate } from "../schemas.js";
 import { parseCamt, parseMt940, parseOfx } from "./formats.js";
 import { parsePdfStatement } from "./pdf.js";
@@ -27,7 +27,7 @@ const isRevolutHeader = (cells: unknown[]) => {
   return h.has("started date") && h.has("state") && h.has("product");
 };
 
-function fromRevolut(rows: Awaited<ReturnType<typeof parseStatementXlsx>>): Omit<StatementPreview, "format" | "columns" | "mapping"> {
+function fromRevolut(rows: ReturnType<typeof parseStatementCsv>): Omit<StatementPreview, "format" | "columns" | "mapping"> {
   const { txs, ignored } = toTransactions(rows.rows);
   return {
     currency: null,
@@ -48,29 +48,8 @@ function fromRevolut(rows: Awaited<ReturnType<typeof parseStatementXlsx>>): Omit
   };
 }
 
-/** Far more than any bank statement has; a cell far out would otherwise make the arrays below that long. */
-const MAX_XLSX_ROWS = 100_000;
-const MAX_XLSX_COLUMNS = 200;
-
-async function xlsxRows(data: Buffer): Promise<Cell[][]> {
-  const wb = await loadWorkbook(data, "Not a readable XLSX file");
-  // The statement is the sheet with the most filled rows; banks sometimes add a cover sheet.
-  const ws = [...wb.worksheets].sort((a, b) => b.actualRowCount - a.actualRowCount)[0];
-  if (!ws) throw badRequest("The XLSX file has no worksheets");
-  const rows: Cell[][] = [];
-  // Only cells with a value: with includeEmpty, a formatted cell at the sheet's far corner makes millions of empty ones.
-  ws.eachRow((row, n) => {
-    if (n > MAX_XLSX_ROWS) throw badRequest(`The sheet has a value in row ${n}; statements of more than ${MAX_XLSX_ROWS} rows are not read`);
-    const cells: Cell[] = [];
-    row.eachCell((cell, c) => {
-      if (c > MAX_XLSX_COLUMNS) throw badRequest(`The sheet has a value in column ${c}; more than ${MAX_XLSX_COLUMNS} columns are not read`);
-      const v = cell.value;
-      cells[c - 1] = v instanceof Date || typeof v === "number" ? v : (String(cellValue(v)) as Cell);
-    });
-    rows[n - 1] = Array.from(cells, (c) => c ?? null);
-  });
-  return Array.from(rows, (r) => r ?? []);
-}
+/** Dates and numbers stay as they are (a formula's result included); everything else is text. */
+const tabularCell = (c: SheetCell): Cell => (c instanceof Date || typeof c === "number" || c === null ? c : String(cellValue(c)));
 
 export function sniffStatement(data: Buffer, filename: string): StatementFormat | "xls" | "text" {
   const head = data.subarray(0, 8);
@@ -103,9 +82,11 @@ export async function parseStatementFile(
     return { format: "pdf", ...empty, ...r };
   }
   if (kind === "xlsx") {
-    const rows = await xlsxRows(file.data);
-    if (isRevolutHeader(rows[0] ?? [])) return { format: "revolut", ...empty, ...fromRevolut(await parseStatementXlsx(file.data)) };
-    return { format: "xlsx", ...parseTabular(rows, opts) };
+    // The statement is the sheet with the most filled rows; banks sometimes add a cover sheet.
+    const sheet = busiestSheet(await readWorkbook(file.data, "Not a readable XLSX file"));
+    if (!sheet) throw badRequest("The XLSX file has no worksheets");
+    if (isRevolutHeader(sheet.rows[0] ?? [])) return { format: "revolut", ...empty, ...fromRevolut(parseStatementSheet(sheet.rows)) };
+    return { format: "xlsx", ...parseTabular(sheet.rows.map((r) => r.map(tabularCell)), opts) };
   }
 
   const text = decodeText(file.data);
