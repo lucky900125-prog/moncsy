@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
+import type { BackupStatus } from "./backup";
 import type { AnalyzeRequest, AnalyzeResponse, Category, ReceiptScanResult, Transaction } from "@et/shared";
 
 const KEY = "moncsy-api";
@@ -76,7 +77,8 @@ const json = (method: string, body: unknown): RequestInit => ({
 });
 
 export const api = {
-  health: () => call<{ status: string; ai: { provider: string; model: string } }>("/health"),
+  // /health is public; "ai" is only in the answer when the request carried the right token.
+  health: () => call<{ status: string; auth?: "token" | "none"; ai?: { provider: string; model: string }; backup?: BackupStatus }>("/health"),
   categories: () => call<Category[]>("/categories"),
   transactions: () => call<Transaction[]>("/transactions"),
   createTransaction: (t: Omit<Transaction, "id">) => call<Transaction>("/transactions", json("POST", t)),

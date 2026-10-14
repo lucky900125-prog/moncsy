@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { Download, Upload, RefreshCw, Landmark, FileUp, Server, RotateCcw, Eye, EyeOff, KeyRound, ChevronRight } from "lucide-react";
+import { Download, Upload, RefreshCw, Landmark, FileUp, Server, RotateCcw, Eye, EyeOff, KeyRound, ChevronRight, CloudCheck, CloudOff, CloudAlert, CloudUpload } from "lucide-react";
 import { toast } from "sonner";
 import type { RevolutStatus } from "@et/shared";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,8 +12,12 @@ import { Segmented } from "@/components/ui/segmented";
 import { useApp } from "@/store/app";
 import { getTheme, setTheme, type Theme } from "@/lib/theme";
 import { resetDemo } from "@/lib/demo";
-import { getApiToken, getApiUrlSetting, saveConnection, type ImportResult } from "@/lib/backend";
+import { getApiToken, getApiUrlSetting, saveConnection, type BackupStatus, type ImportResult } from "@/lib/backend";
+import { backupHealth } from "@/lib/backup";
 import { shortDate } from "@/lib/format";
+import { format, formatDistanceToNow } from "date-fns";
+import { hu } from "date-fns/locale";
+import { cn } from "@/lib/utils";
 
 function reportImport(r: ImportResult) {
   toast.success(`${r.imported} tétel importálva`, {
@@ -30,10 +34,16 @@ export function SettingsPage() {
   const [token, setToken] = useState(getApiToken);
   const [showToken, setShowToken] = useState(false);
   const [revolut, setRevolut] = useState<RevolutStatus | null>(null);
+  const [backup, setBackup] = useState<BackupStatus | null>(null);
+  const [backupError, setBackupError] = useState<string | null>(null);
   const [revolutError, setRevolutError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
   const statementRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    backend?.backupStatus().then(setBackup, (e) => setBackupError((e as Error).message));
+  }, [backend]);
 
   useEffect(() => {
     backend?.revolutStatus().then(setRevolut, (e) => setRevolutError((e as Error).message));
@@ -93,6 +103,8 @@ export function SettingsPage() {
           />
         </CardContent>
       </Card>
+
+      {(backup || backupError) && <BackupCard status={backup} error={backupError} />}
 
       <Card>
         <CardHeader className="flex-row items-center justify-between">
@@ -210,5 +222,38 @@ export function SettingsPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+const backupTone = {
+  ok: { icon: CloudCheck, cls: "text-positive" },
+  pending: { icon: CloudUpload, cls: "text-muted-foreground" },
+  warn: { icon: CloudAlert, cls: "text-amber-600 dark:text-amber-300" },
+  error: { icon: CloudAlert, cls: "text-destructive" },
+  off: { icon: CloudOff, cls: "text-muted-foreground" },
+} as const;
+
+/** Off-site backup state; only shown when the API reports it (never in demo mode). */
+function BackupCard({ status, error }: { status: BackupStatus | null; error: string | null }) {
+  const h = status ? backupHealth(status) : { tone: "error" as const, title: "A mentés állapota nem kérdezhető le", detail: error ?? undefined };
+  const t = backupTone[h.tone];
+  const last = status?.enabled ? status.lastBackupAt : null;
+  return (
+    <Card className="animate-fade-in">
+      <CardHeader><CardTitle>Mentés</CardTitle></CardHeader>
+      <CardContent className="flex items-start gap-3">
+        <t.icon className={cn("mt-0.5 size-5 shrink-0", t.cls)} />
+        <div className="min-w-0 text-sm">
+          <p className={cn("font-medium", (h.tone === "warn" || h.tone === "error") && t.cls)}>{h.title}</p>
+          {last && (
+            <p className="text-muted-foreground">
+              Utolsó sikeres mentés: {formatDistanceToNow(new Date(last), { locale: hu, addSuffix: true })}
+              <span className="text-xs"> ({format(new Date(last), "yyyy. MM. dd. HH:mm")})</span>
+            </p>
+          )}
+          {h.detail && <p className="mt-1 break-words text-muted-foreground">{h.detail}</p>}
+        </div>
+      </CardContent>
+    </Card>
   );
 }

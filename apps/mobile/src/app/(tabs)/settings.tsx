@@ -3,6 +3,9 @@ import { Text, TextInput } from "react-native";
 import { Button, Card, Label, Screen, useTheme } from "@/components/ui";
 import { api, getApiToken, getApiUrl, setApiToken, setApiUrl } from "@/lib/api";
 import { useData } from "@/lib/data";
+import { backupHealth, type BackupStatus } from "@/lib/backup";
+import { format, formatDistanceToNow } from "date-fns";
+import { hu } from "date-fns/locale";
 
 export default function Settings() {
   const t = useTheme();
@@ -11,10 +14,15 @@ export default function Settings() {
   const [token, setToken] = useState("");
   const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [backup, setBackup] = useState<BackupStatus | null>(null);
 
   useEffect(() => {
     getApiUrl().then(setUrl);
     getApiToken().then(setToken);
+    // Backup state comes with /health; without an address or a valid token there is nothing to show.
+    getApiUrl()
+      .then((u) => (u ? api.health() : null))
+      .then((h) => setBackup(h?.ai ? (h.backup ?? null) : null), () => setBackup(null));
   }, []);
 
   async function saveAndTest() {
@@ -23,7 +31,9 @@ export default function Settings() {
       await setApiUrl(url);
       await setApiToken(token);
       const h = await api.health();
+      if (!h.ai) throw new Error(token.trim() ? "Az API elutasította a tokent." : "Az API tokent kér. Add meg fent.");
       setStatus({ ok: true, text: `Kapcsolódva · AI: ${h.ai.provider} (${h.ai.model})` });
+      setBackup(h.backup ?? null);
       await refresh();
     } catch (e) {
       setStatus({ ok: false, text: (e as Error).message });
@@ -69,6 +79,25 @@ export default function Settings() {
           <Text className={`text-sm ${status.ok ? "text-positive dark:text-positive-dark" : "text-danger dark:text-danger-dark"}`}>{status.text}</Text>
         ) : null}
       </Card>
+      {backup ? <BackupCard status={backup} /> : null}
     </Screen>
+  );
+}
+
+function BackupCard({ status }: { status: BackupStatus }) {
+  const h = backupHealth(status);
+  const tone = h.tone === "error" ? "text-danger dark:text-danger-dark" : h.tone === "warn" ? "text-amber-600 dark:text-amber-300" : h.tone === "ok" ? "text-positive dark:text-positive-dark" : "text-fg dark:text-fg-dark";
+  const last = status.enabled ? status.lastBackupAt : null;
+  return (
+    <Card className="gap-1">
+      <Label>Mentés</Label>
+      <Text className={`font-medium ${tone}`}>{h.title}</Text>
+      {last ? (
+        <Text className="text-sm text-muted-fg dark:text-muted-fg-dark">
+          Utolsó sikeres mentés: {formatDistanceToNow(new Date(last), { locale: hu, addSuffix: true })} ({format(new Date(last), "yyyy. MM. dd. HH:mm")})
+        </Text>
+      ) : null}
+      {h.detail ? <Text className="text-sm text-muted-fg dark:text-muted-fg-dark">{h.detail}</Text> : null}
+    </Card>
   );
 }

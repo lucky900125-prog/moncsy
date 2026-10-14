@@ -262,6 +262,8 @@ export const demoBackend: Backend = {
     return { imported: fresh.length, skipped: rows.length - fresh.length, errors: [] };
   },
   exportFile: () => notInDemo("Az XLSX/XML export"),
+  // The demo keeps its data in this browser only; there is no server backup to report.
+  backupStatus: async () => null,
 };
 
 function demoProductAnalysis(tx: Transaction[], question?: string): AnalyzeResponse {

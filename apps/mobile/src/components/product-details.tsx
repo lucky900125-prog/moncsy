@@ -210,7 +210,8 @@ function ProductRow({ p, open, onToggle, onAsk, busy }: { p: ProductStat; open: 
   const t = useTheme();
   const cheapest = p.stores[0]!;
   return (
-    <Card className="gap-2 p-0">
+    // Not <Card>: its p-4 would double the row's own padding (NativeWind does not let a later p-0 win).
+    <View className="overflow-hidden rounded-2xl border border-line bg-card dark:border-line-dark dark:bg-card-dark">
       <Pressable onPress={onToggle} className="flex-row items-center gap-3 px-4 py-3 active:opacity-80">
         <View className="flex-1 gap-0.5">
           <View className="flex-row flex-wrap items-center gap-1.5">
@@ -251,6 +252,6 @@ function ProductRow({ p, open, onToggle, onAsk, busy }: { p: ProductStat; open: 
           </Pressable>
         </View>
       ) : null}
-    </Card>
+    </View>
   );
 }
