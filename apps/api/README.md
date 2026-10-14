@@ -151,7 +151,7 @@ The model answers in Hungarian unless the question is in another language.
 
 `POST /statements/parse` reads a statement from any bank and returns a preview; `POST /statements/import` saves the rows the user confirmed. The format is detected from the content, not the file name:
 
-- **CSV / XLSX.** The header row is searched for in the first 40 rows, and columns are matched by Hungarian, English and German names (accents and case ignored) to roles such as `date`, `amount` or `debit` + `credit`, `currency`, `counterparty`, `description`. The decimal separator and the day/month order are detected per column. CSV may be UTF-8 or Windows-1250, with `;`, `,`, tab or `|` delimiters. When the date or the amount cannot be found, the preview lists the columns so the client can send a `mapping`. A Revolut export is routed to the Revolut parser.
+- **CSV / XLSX.** The header row is searched for in the first 40 rows, and columns are matched by Hungarian, English and German names (accents and case ignored) to roles such as `date`, `amount` or `debit` + `credit`, `currency`, `counterparty`, `description`. The decimal separator and the day/month order are detected per column. CSV may be UTF-8, UTF-16 with a byte order mark (Excel's "Unicode text") or Windows-1250, with `;`, `,`, tab or `|` delimiters. When the date or the amount cannot be found, the preview lists the columns so the client can send a `mapping`. A Revolut export is routed to the Revolut parser.
 - **CAMT.052/053/054** (ISO 20022 XML), **OFX** and **MT940** are read by their structure.
 - **PDF** goes to the AI provider's vision call, so it needs a real provider.
 - **Old `.xls`** and XML that is not a bank statement are refused with 415 and a message saying what to do.
@@ -165,10 +165,10 @@ Statement import (`POST /revolut/import-statement`) works in every mode. `REVOLU
 
 In the Revolut app, choose Account → Statement → Excel or CSV, then upload the file.
 
-- **Columns.** The importer reads `Type, Product, Started Date, Completed Date, Description, Amount, Fee, Currency, State, Balance` by header name, case-insensitive. CSV (with or without BOM) and XLSX are both supported.
+- **Columns.** The importer reads `Type, Product, Started Date, Completed Date, Description, Amount, Fee, Currency, State, Balance` by header name, case-insensitive. CSV (with or without BOM) and XLSX are both supported. A CSV saved again from a Hungarian Excel, with `;` delimiters, decimal commas and `2026. 10. 01. 8:15` dates, is read too.
 - **Which rows are imported.** Only `State = COMPLETED` rows are imported. `EXCHANGE` rows (internal currency conversions) are not imported. Both kinds count as `skipped`.
 - **Amounts.** Amount = `Amount − Fee`. A non-zero fee is mentioned in the note.
-- **Dates.** The date is `Completed Date`, or `Started Date` when there is none. Revolut writes local time without an offset, and it is stored as if it were UTC.
+- **Dates.** The date is `Completed Date`, or `Started Date` when there is none. Revolut writes local time without an offset; it is read in `STATEMENT_TZ` and stored as UTC.
 - **Deduplication.** `externalId = "revolut:" + sha256(date | amount | description)`. Re-importing the same or an overlapping statement, in either format, skips rows that already exist. Identical rows within one file get an `:n` suffix.
 - **Categories.** Simple keyword rules (`categorize.ts`) match accent- and case-insensitively: Spar/Tesco/Lidl → Élelmiszer, Wolt/foodora → Étterem, BKK/MOL/Bolt → Közlekedés, Netflix/Spotify → Előfizetések, and so on. Any other positive amount → Bevétel. Rows with no match get `null`.
 - **Status.** `/revolut/status` reports the latest balance per product and currency seen in statements. `/revolut/sync` returns 400 in this mode.

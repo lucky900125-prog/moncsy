@@ -3,6 +3,7 @@ import { parse } from "csv-parse/sync";
 import type { RevolutStatus } from "@et/shared";
 import { getMeta, setMeta } from "../db.js";
 import { badRequest } from "../errors.js";
+import { decodeText, detectDelimiter } from "../io/text.js";
 import type { Repository } from "../repository.js";
 import { categorize } from "./categorize.js";
 import { cellValue, loadWorkbook } from "../io/xlsx.js";
@@ -75,13 +76,14 @@ export function zonedToUtc(y: number, mo: number, d: number, h: number, mi: numb
  * Revolut writes local wall-clock time without an offset ("2026-10-01 08:15:42").
  * It is interpreted in STATEMENT_TZ (default Europe/Budapest) and stored as UTC.
  * Excel Date cells carry the same wall-clock time encoded as UTC, so they are re-interpreted too.
+ * A statement opened in a Hungarian Excel and saved again as CSV has "2026. 10. 01. 8:15" instead.
  */
 export function revolutDate(v: unknown, timeZone = process.env.STATEMENT_TZ || "Europe/Budapest"): string {
   if (v instanceof Date) {
     return zonedToUtc(v.getUTCFullYear(), v.getUTCMonth() + 1, v.getUTCDate(), v.getUTCHours(), v.getUTCMinutes(), v.getUTCSeconds(), timeZone).toISOString();
   }
   const s = String(v ?? "").trim();
-  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+  const m = s.match(/^(\d{4})(?:-|\. ?)(\d{1,2})(?:-|\. ?)(\d{1,2})\.?(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
   if (m) {
     const [, y, mo, d, h = "0", mi = "0", sec = "0"] = m;
     return zonedToUtc(+y!, +mo!, +d!, +h, +mi, +sec, timeZone).toISOString();
@@ -140,9 +142,10 @@ function normalizeRecords(records: Record<string, unknown>[], keys: string[]): {
   return { rows, errors };
 }
 
-export function parseStatementCsv(text: string): { rows: StatementRow[]; errors: string[] } {
+/** The app writes commas; a statement saved again from a Hungarian Excel has semicolons. */
+export function parseStatementCsv(text: string, delimiter = detectDelimiter(text)): { rows: StatementRow[]; errors: string[] } {
   // relax_quotes: a stray quote inside a description (`Spar 5" cable`) is part of the text, not a broken file.
-  const common = { bom: true, skip_empty_lines: true, trim: true, relax_quotes: true } as const;
+  const common = { bom: true, delimiter, skip_empty_lines: true, trim: true, relax_quotes: true } as const;
   let header: string[];
   let records: Record<string, unknown>[];
   try {
@@ -221,7 +224,7 @@ export async function importStatement(
     /\.xlsx$/i.test(file.filename) ||
     file.mimetype === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
     file.data.subarray(0, 2).toString("latin1") === "PK";
-  const { rows, errors } = isXlsx ? await parseStatementXlsx(file.data) : parseStatementCsv(file.data.toString("utf8"));
+  const { rows, errors } = isXlsx ? await parseStatementXlsx(file.data) : parseStatementCsv(decodeText(file.data));
   const { txs, ignored } = toTransactions(rows);
   let imported = 0;
   let skipped = ignored;

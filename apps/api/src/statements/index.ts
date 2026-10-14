@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { StatementFormat, StatementMapping, StatementPreview, StatementTx } from "@et/shared";
 import type { AIProvider } from "../ai/index.js";
 import { HttpError, badRequest } from "../errors.js";
+import { decodeText, detectDelimiter, utf16Encoding } from "../io/text.js";
 import { cellValue, loadWorkbook } from "../io/xlsx.js";
 import type { Repository } from "../repository.js";
 import { parseStatementCsv, parseStatementXlsx, toTransactions } from "../revolut/csv.js";
@@ -19,39 +20,7 @@ export interface ParseOptions {
   timeZone: string;
 }
 
-/** UTF-8 when the bytes are valid UTF-8, otherwise Windows-1250, the code page of older Hungarian bank exports. */
-export function decodeText(data: Buffer): string {
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(data).replace(/^\uFEFF/, "");
-  } catch {
-    return new TextDecoder("windows-1250").decode(data);
-  }
-}
-
-/** The separator that splits the first lines into the same, largest number of fields. */
-export function detectDelimiter(text: string): string {
-  const lines = text.split(/\r?\n/).filter((l) => l.trim()).slice(0, 30);
-  let best = ",";
-  let bestScore = -1;
-  for (const d of [";", ",", "\t", "|"]) {
-    const counts = lines.map((l) => {
-      let n = 0;
-      let quoted = false;
-      for (const ch of l) {
-        if (ch === '"') quoted = !quoted;
-        else if (ch === d && !quoted) n++;
-      }
-      return n;
-    });
-    // The most common count among lines that have any separator, times how many lines share it.
-    const freq = new Map<number, number>();
-    for (const c of counts) if (c > 0) freq.set(c, (freq.get(c) ?? 0) + 1);
-    const [count, lines_] = [...freq.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0])[0] ?? [0, 0];
-    const score = count * lines_;
-    if (score > bestScore) [best, bestScore] = [d, score];
-  }
-  return best;
-}
+export { decodeText, detectDelimiter };
 
 const isRevolutHeader = (cells: unknown[]) => {
   const h = new Set(cells.map((c) => fold(String(c ?? ""))));
@@ -109,7 +78,12 @@ export function sniffStatement(data: Buffer, filename: string): StatementFormat 
   if (head.subarray(0, 2).toString("latin1") === "PK") return "xlsx";
   if (head.equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]))) return "xls";
   // Old Excel saved as HTML or SpreadsheetML is also named .xls; tab-separated text with that name is read as text.
-  if (/\.xls$/i.test(filename) && (data.includes(0) || /^(\uFEFF|\xEF\xBB\xBF)?\s*</.test(data.subarray(0, 256).toString("latin1")))) return "xls";
+  // UTF-16 text is full of zero bytes, so for it only the decoded start counts.
+  if (/\.xls$/i.test(filename)) {
+    const utf16 = utf16Encoding(data) !== null;
+    const start = utf16 ? decodeText(data.subarray(0, 512)) : data.subarray(0, 256).toString("latin1");
+    if ((!utf16 && data.includes(0)) || /^(\uFEFF|\xEF\xBB\xBF)?\s*</.test(start)) return "xls";
+  }
   return "text";
 }
 
@@ -153,7 +127,7 @@ export async function parseStatementFile(
   } catch (e) {
     throw badRequest(`Not a readable CSV file: ${(e as Error).message}`);
   }
-  if (isRevolutHeader(rows[0] ?? [])) return { format: "revolut", ...empty, ...fromRevolut(parseStatementCsv(text)) };
+  if (isRevolutHeader(rows[0] ?? [])) return { format: "revolut", ...empty, ...fromRevolut(parseStatementCsv(text, delimiter)) };
   return { format: "csv", ...parseTabular(rows, opts) };
 }
 
