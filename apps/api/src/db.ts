@@ -20,7 +20,7 @@ export interface DB {
 }
 
 /**
- * node:sqlite (built into Node 22) rather than better-sqlite3: pnpm 10 blocks dependency build scripts
+ * node:sqlite (built into Node) rather than better-sqlite3: pnpm 10 blocks dependency build scripts
  * unless they are allow-listed in the workspace root config, so better-sqlite3's native binary is never built.
  *
  * One connection serves every request. While a transaction is open, queries from other requests wait

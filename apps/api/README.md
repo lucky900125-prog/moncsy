@@ -1,6 +1,6 @@
 # @et/api
 
-The expense tracker's backend: Fastify on Node 22, SQLite storage with an optional encrypted off-site backup, a pluggable AI provider for receipt scanning and spending and product analysis, bank statement import for any bank, and Revolut import. It implements the HTTP contract in `packages/shared/src/index.ts`. All routes are under `/api`, and with `API_TOKEN` set every route except `/health` needs `Authorization: Bearer <API_TOKEN>`.
+The expense tracker's backend: Fastify on Node 24 (the repository's `.node-version`; `engines` asks for 24 or later), SQLite storage with an optional encrypted off-site backup, a pluggable AI provider for receipt scanning and spending and product analysis, bank statement import for any bank, and Revolut import. It implements the HTTP contract in `packages/shared/src/index.ts`. All routes are under `/api`, and with `API_TOKEN` set every route except `/health` needs `Authorization: Bearer <API_TOKEN>`.
 
 ```bash
 pnpm install                 # from the repo root
@@ -13,7 +13,7 @@ Copy `.env.example` to `.env`. The server loads `./.env` from its working direct
 
 ## Storage
 
-The API uses SQLite through **`node:sqlite`**, which is built into Node 22, rather than `better-sqlite3`. pnpm 10 blocks dependency build scripts unless they are allow-listed in the workspace root config, so `better-sqlite3`'s native binary never gets built. `node:sqlite` needs no native build. Node prints an `ExperimentalWarning` for it, and the `dev`/`start` scripts suppress that warning.
+The API uses SQLite through **`node:sqlite`**, which is built into Node, rather than `better-sqlite3`. pnpm 10 blocks dependency build scripts unless they are allow-listed in the workspace root config, so `better-sqlite3`'s native binary never gets built. `node:sqlite` needs no native build. Node 22 prints an `ExperimentalWarning` for it and Node 24.21 does not; the `dev`/`start` scripts suppress that warning either way.
 
 Everything above the database talks to the small async `DB` interface in `db.ts` (`all`, `get`, `run`, `exec`, `tx`, `close`), so another engine can be dropped in without touching the repository. `tx()` runs one transaction at a time; queries outside it wait for it to finish.
 
@@ -93,7 +93,7 @@ For hosts whose disk is wiped on restart (Render's free plan), set `BACKUP_GITHU
 | `PATCH /transactions/:id` | partial; `note`/`items`/`categoryId`/`externalId` accept `null` to clear | `Transaction` |
 | `DELETE /transactions/:id` | | `204` |
 | `GET /summary` | `from`, `to` (required), `currency` (optional) | `Summary` |
-| `POST /receipts/scan` | multipart `file`: JPEG/PNG/WebP/HEIC/PDF, max 10 MB | `ReceiptScanResult` |
+| `POST /receipts/scan` | multipart `file`: JPEG/PNG/WebP/HEIC/PDF, max 10 MB; whether HEIC and PDF can be read depends on the AI provider (see below) | `ReceiptScanResult` |
 | `POST /ai/analyze` | `AnalyzeRequest`; `scope: "products"` asks where each product was cheapest, optionally narrowed by `products: { q?, brand?, merchant? }` | `AnalyzeResponse`; 422 when the range has no (matching) receipt line items |
 | `GET /products` | `from`, `to` (optional) | `{ products: ProductStat[], stores: StoreRank[] }` from receipt line items (`@et/shared/products`) |
 | `POST /statements/parse` | multipart `file`: any bank's CSV/XLSX, CAMT.052/053/054, OFX, MT940, PDF (AI); optional fields `mapping` (JSON) and `currency`, sent before the file | `StatementPreview`; nothing is saved |
@@ -122,13 +122,13 @@ interface AIProvider {
 }
 ```
 
-All adapters use plain `fetch`, with no vendor SDKs. The callers in `src/services/` ask for strict JSON and validate the reply with zod in `ai/json.ts`. A surrounding Markdown code fence is tolerated. If the reply does not parse, or parses but has the wrong shape, the endpoint returns **502** with the reason and the first 1000 characters of the raw answer in `details`. Nothing is silently defaulted. The only sanitizing step: a `suggestedCategoryId` that is not an existing category id becomes `null`.
+All adapters use plain `fetch`, with no vendor SDKs. The callers in `src/services/` ask for strict JSON and validate the reply with zod in `ai/json.ts`. A surrounding Markdown code fence is tolerated. If the reply does not parse, or parses but has the wrong shape, the endpoint returns **502** with the reason and the first 1000 characters of the raw answer in `details`. Defaults are few and named here. A `suggestedCategoryId` that is not an existing category id becomes `null`. On a receipt, a line without a quantity counts as 1 and a reply without lines has none; a line's product details (`product`, `brand`, `packSize`, `packUnit`) that do not fit their type become `null` instead of failing the scan, because they only enrich the line.
 
 | Provider | Setup | Notes |
 |---|---|---|
 | **mock** (default without keys) | nothing | Deterministic and offline. `vision` returns a fixed SPAR receipt (4 785 HUF, 5 items, `groceries`). `complete` derives Hungarian insights from the aggregate it is sent |
 | **anthropic** | `AI_PROVIDER=anthropic`, `ANTHROPIC_API_KEY=…`, optional `AI_MODEL` (default `claude-sonnet-5-5`) | `POST https://api.anthropic.com/v1/messages`, `anthropic-version: 2023-06-01`. Images are sent as `image` blocks (JPEG/PNG/GIF/WebP) and PDFs as `document` blocks. HEIC returns 415, so convert it to JPEG first. A `refusal` or `max_tokens` stop returns 502. Against the official endpoint the adapter also sends the server-side refusal fallback (`anthropic-beta: server-side-fallback-2026-07-01`, `fallbacks: "default"`). Set `ANTHROPIC_FALLBACKS=off` to disable it; it is skipped automatically when `AI_BASE_URL` points elsewhere |
-| **openai** | `AI_PROVIDER=openai`, `OPENAI_API_KEY=…`, optional `AI_MODEL` (default `gpt-4.1-mini`) | `POST {base}/chat/completions` with `response_format: json_object`. Images are sent as `image_url` data URLs and PDFs as `file` parts (OpenAI supports these; many compatible servers do not) |
+| **openai** | `AI_PROVIDER=openai`, `OPENAI_API_KEY=…`, optional `AI_MODEL` (default `gpt-4.1-mini`) | `POST {base}/chat/completions` with `response_format: json_object`. Images are sent as `image_url` data URLs and PDFs as `file` parts (OpenAI supports these; many compatible servers do not). HEIC is passed on as it is; a server that cannot read it answers with an error, which comes back as 502, not 415 |
 | ↳ OpenRouter | `AI_PROVIDER=openai`, `AI_BASE_URL=https://openrouter.ai/api/v1`, `AI_API_KEY=sk-or-…`, `AI_MODEL=anthropic/claude-sonnet-5-5` (any vision model) | |
 | ↳ Groq | `AI_PROVIDER=openai`, `AI_BASE_URL=https://api.groq.com/openai/v1`, `AI_API_KEY=gsk_…`, `AI_MODEL=<a Groq vision model>` | |
 | ↳ LM Studio / vLLM | `AI_PROVIDER=openai`, `AI_BASE_URL=http://localhost:1234/v1`, `AI_MODEL=<loaded model>` | No key is needed for a non-OpenAI base URL. Set `AI_JSON_MODE=off` if the server rejects `json_object` |

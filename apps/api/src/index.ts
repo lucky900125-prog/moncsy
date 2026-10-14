@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 
-// Load ./.env when present (Node 22 built-in; real environment variables take precedence).
+// Load ./.env when present (built into Node; real environment variables take precedence).
 if (existsSync(".env")) process.loadEnvFile(".env");
 
 const { buildApp } = await import("./app.js");
