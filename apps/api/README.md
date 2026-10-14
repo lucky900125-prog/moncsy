@@ -1,0 +1,219 @@
+# @et/api
+
+The expense tracker's backend: Fastify on Node 22, SQLite storage, a pluggable AI provider for receipt scanning and spending analysis, and Revolut import. It implements the HTTP contract in `packages/shared/src/index.ts`. All routes are under `/api`.
+
+```bash
+pnpm install                 # from the repo root
+pnpm --filter @et/api dev    # tsx watch, http://localhost:8787/api/health
+pnpm --filter @et/api build && pnpm --filter @et/api start
+pnpm --filter @et/api test   # vitest; uses the offline mock provider, no network
+```
+
+Copy `.env.example` to `.env`. The server loads `./.env` from its working directory at startup, and real environment variables take precedence over it.
+
+## Storage
+
+The API uses SQLite through **`node:sqlite`**, which is built into Node 22, rather than `better-sqlite3`. pnpm 10 blocks dependency build scripts unless they are allow-listed in the workspace root config, so `better-sqlite3`'s native binary never gets built. `node:sqlite` needs no native build. Node prints an `ExperimentalWarning` for it, and the `dev`/`start` scripts suppress that warning.
+
+The database is created at `DB_PATH` on first run. The default categories are seeded once. Their ids are stable English slugs and their names are Hungarian:
+
+| id | name | icon (lucide) | color |
+|---|---|---|---|
+| groceries | Élelmiszer | shopping-cart | #7c9a7e |
+| restaurant | Étterem | utensils | #c08b6a |
+| transport | Közlekedés | bus | #6f8fa8 |
+| housing | Lakhatás | home | #9a8577 |
+| utilities | Rezsi | zap | #c2a65f |
+| entertainment | Szórakozás | film | #a07fa3 |
+| health | Egészség | heart-pulse | #c47f86 |
+| clothing | Ruházat | shirt | #8c8fb3 |
+| travel | Utazás | plane | #5f9c9a |
+| subscriptions | Előfizetések | repeat | #8a9bb0 |
+| other | Egyéb | circle-ellipsis | #9e9e94 |
+| income | Bevétel | wallet | #6e9f72 |
+
+## Environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PORT` | `8787` | HTTP port |
+| `HOST` | `0.0.0.0` | Bind address |
+| `DB_PATH` | `./data/expense.db` | SQLite file (`:memory:` for an ephemeral DB) |
+| `CORS_ORIGIN` | `*` | Allowed origins, comma-separated |
+| `DEFAULT_CURRENCY` | `HUF` | Summary/analysis currency when a range has no transactions |
+| `AI_PROVIDER` | auto | `anthropic` \| `openai` \| `ollama` \| `mock`. If unset: `anthropic` when `ANTHROPIC_API_KEY` is set, else `openai` when `OPENAI_API_KEY` is set, else `mock` |
+| `AI_MODEL` | per provider | `claude-sonnet-5-5` / `gpt-4.1-mini` / `llama3.2-vision` |
+| `AI_API_KEY` | – | Key for the selected provider (overrides the two below) |
+| `ANTHROPIC_API_KEY` | – | Anthropic key |
+| `OPENAI_API_KEY` | – | OpenAI key |
+| `AI_BASE_URL` | per provider | Endpoint override (OpenRouter, Groq, LM Studio, remote Ollama, proxies) |
+| `AI_TIMEOUT_MS` | `90000` (ollama `180000`) | Per-request timeout |
+| `AI_JSON_MODE` | `on` | openai provider: send `response_format: json_object`. Set `off` for servers that reject it |
+| `ANTHROPIC_FALLBACKS` | `on` | anthropic provider: server-side refusal fallback (see below) |
+| `REVOLUT_MODE` | auto | `business-api` \| `open-banking` \| `csv`. If unset: `business-api` when `REVOLUT_BUSINESS_TOKEN` is set, else `csv` |
+| `REVOLUT_BUSINESS_TOKEN` | – | Revolut Business API access token |
+| `REVOLUT_ENV` | `production` | `production` or `sandbox` |
+
+## Endpoints
+
+| Method & path | Body / query | Response |
+|---|---|---|
+| `GET /health` | | `{ status, time, ai: { provider, model }, revolut: { mode } }` |
+| `GET /categories` | | `Category[]` |
+| `POST /categories` | `{ name, icon, color, parentId?, budget? }` | `201 Category` (`isCustom: true`) |
+| `PATCH /categories/:id` | any subset of the create fields | `Category` |
+| `DELETE /categories/:id` | | `204`. Only custom categories (built-in → `409`). Their transactions and subcategories fall back to `null` |
+| `GET /transactions` | `from`, `to`, `categoryId` (`none` = uncategorized), `q` (merchant/note search) | `Transaction[]`, newest first |
+| `POST /transactions` | `Omit<Transaction,"id">`. `source` defaults to `manual`, `categoryId` to `null` | `201 Transaction` |
+| `PATCH /transactions/:id` | partial; `note`/`items`/`categoryId`/`externalId` accept `null` to clear | `Transaction` |
+| `DELETE /transactions/:id` | | `204` |
+| `GET /summary` | `from`, `to` (required), `currency` (optional) | `Summary` |
+| `POST /receipts/scan` | multipart `file`: JPEG/PNG/WebP/HEIC/PDF, max 10 MB | `ReceiptScanResult` |
+| `POST /ai/analyze` | `AnalyzeRequest` | `AnalyzeResponse` |
+| `GET /revolut/status` | | `RevolutStatus` |
+| `POST /revolut/sync` | | `{ imported, skipped }` |
+| `POST /revolut/import-statement` | multipart `file`: Revolut CSV or XLSX statement | `{ imported, skipped, errors }` |
+| `POST /import` | multipart `file`: `.xlsx` or `.xml` | `{ imported, skipped, errors }` |
+| `GET /export` | `format=xlsx\|xml` (default xlsx), `from`, `to` | file download |
+
+Conventions:
+
+- **Errors.** Every error returns `{ error: string, details?: unknown }`. The status codes are 400 (validation), 404, 409 (conflict, built-in category), 413 (upload > 10 MB), 415 (wrong file type), 501 (open-banking sync) and 502 (AI provider or Revolut upstream failure, or invalid AI JSON).
+- **Dates.** Dates are stored as full ISO 8601 UTC strings. Any parseable date is accepted on input, and `2026-10-12` becomes `2026-10-12T00:00:00.000Z`. A date-only `to` covers the whole day.
+- **`GET /summary`.** Amounts in different currencies are never added together. The summary covers `currency`, or else the most common currency in the range, or else `DEFAULT_CURRENCY`. `income` and `expense` are non-negative magnitudes. `byCategory[].total` is the signed sum (negative = spending), largest spend first. An income category has a positive total.
+- **Notes.** An empty `note` is stored as no note.
+- **Duplicate `externalId`.** Creating a transaction with an existing `externalId` returns 409.
+
+## AI providers (`src/ai/`)
+
+```ts
+interface AIProvider {
+  name: string; model: string;
+  complete(messages: ChatMessage[], opts?: { json?, maxTokens?, temperature? }): Promise<string>;
+  vision(imageBase64: string, mime: string, prompt: string, opts?): Promise<string>;
+}
+```
+
+All adapters use plain `fetch`, with no vendor SDKs. The callers in `src/services/` ask for strict JSON and validate the reply with zod in `ai/json.ts`. A surrounding Markdown code fence is tolerated. If the reply does not parse, or parses but has the wrong shape, the endpoint returns **502** with the reason and the first 1000 characters of the raw answer in `details`. Nothing is silently defaulted. The only sanitizing step: a `suggestedCategoryId` that is not an existing category id becomes `null`.
+
+| Provider | Setup | Notes |
+|---|---|---|
+| **mock** (default without keys) | nothing | Deterministic and offline. `vision` returns a fixed SPAR receipt (4 785 HUF, 5 items, `groceries`). `complete` derives Hungarian insights from the aggregate it is sent |
+| **anthropic** | `AI_PROVIDER=anthropic`, `ANTHROPIC_API_KEY=…`, optional `AI_MODEL` (default `claude-sonnet-5-5`) | `POST https://api.anthropic.com/v1/messages`, `anthropic-version: 2023-06-01`. Images are sent as `image` blocks (JPEG/PNG/GIF/WebP) and PDFs as `document` blocks. HEIC returns 415, so convert it to JPEG first. A `refusal` or `max_tokens` stop returns 502. Against the official endpoint the adapter also sends the server-side refusal fallback (`anthropic-beta: server-side-fallback-2026-07-01`, `fallbacks: "default"`). Set `ANTHROPIC_FALLBACKS=off` to disable it; it is skipped automatically when `AI_BASE_URL` points elsewhere |
+| **openai** | `AI_PROVIDER=openai`, `OPENAI_API_KEY=…`, optional `AI_MODEL` (default `gpt-4.1-mini`) | `POST {base}/chat/completions` with `response_format: json_object`. Images are sent as `image_url` data URLs and PDFs as `file` parts (OpenAI supports these; many compatible servers do not) |
+| ↳ OpenRouter | `AI_PROVIDER=openai`, `AI_BASE_URL=https://openrouter.ai/api/v1`, `AI_API_KEY=sk-or-…`, `AI_MODEL=anthropic/claude-sonnet-5-5` (any vision model) | |
+| ↳ Groq | `AI_PROVIDER=openai`, `AI_BASE_URL=https://api.groq.com/openai/v1`, `AI_API_KEY=gsk_…`, `AI_MODEL=<a Groq vision model>` | |
+| ↳ LM Studio / vLLM | `AI_PROVIDER=openai`, `AI_BASE_URL=http://localhost:1234/v1`, `AI_MODEL=<loaded model>` | No key is needed for a non-OpenAI base URL. Set `AI_JSON_MODE=off` if the server rejects `json_object` |
+| **ollama** | `AI_PROVIDER=ollama`, `AI_MODEL=llama3.2-vision` (or `qwen2.5vl`, …), optional `AI_BASE_URL` (default `http://localhost:11434`) | `POST /api/chat` with `format: "json"` and `images: [base64]`. Images only: PDF and HEIC return 415 |
+
+**Receipt scanning.** The prompt (`services/receipt.ts`) gives the model the existing category ids and covers Hungarian receipt conventions: `ÖSSZESEN`/`FIZETENDŐ` as the total, `ÁFA` lines that are not items, `Ft` = HUF, decimal commas, and `2026.10.14.` dates. The file type is detected from magic bytes, then from the declared type and the file extension.
+
+**Analysis.** `/ai/analyze` sends the model an **aggregate**, never raw rows (`services/analyze.ts`). The aggregate holds:
+
+- totals in the main currency
+- spending by category, with share and budget
+- the top 8 merchants
+- monthly income and expense
+- month-over-month change, including the biggest category movers
+- totals for other currencies
+
+The model answers in Hungarian unless the question is in another language.
+
+## Revolut (`src/revolut/`)
+
+Statement import (`POST /revolut/import-statement`) works in every mode. `REVOLUT_MODE` picks what `/revolut/status` and `/revolut/sync` do.
+
+### `csv` (default): statement import
+
+In the Revolut app, choose Account → Statement → Excel or CSV, then upload the file.
+
+- **Columns.** The importer reads `Type, Product, Started Date, Completed Date, Description, Amount, Fee, Currency, State, Balance` by header name, case-insensitive. CSV (with or without BOM) and XLSX are both supported.
+- **Which rows are imported.** Only `State = COMPLETED` rows are imported. `EXCHANGE` rows (internal currency conversions) are not imported. Both kinds count as `skipped`.
+- **Amounts.** Amount = `Amount − Fee`. A non-zero fee is mentioned in the note.
+- **Dates.** The date is `Completed Date`, or `Started Date` when there is none. Revolut writes local time without an offset, and it is stored as if it were UTC.
+- **Deduplication.** `externalId = "revolut:" + sha256(date | amount | description)`. Re-importing the same or an overlapping statement, in either format, skips rows that already exist. Identical rows within one file get an `:n` suffix.
+- **Categories.** Simple keyword rules (`categorize.ts`) match accent- and case-insensitively: Spar/Tesco/Lidl → Élelmiszer, Wolt/foodora → Étterem, BKK/MOL/Bolt → Közlekedés, Netflix/Spotify → Előfizetések, and so on. Any other positive amount → Bevétel. Rows with no match get `null`.
+- **Status.** `/revolut/status` reports the latest balance per product and currency seen in statements. `/revolut/sync` returns 400 in this mode.
+
+### `business-api`: Revolut Business accounts only
+
+Set `REVOLUT_BUSINESS_TOKEN` (Revolut Business → APIs) and optionally `REVOLUT_ENV=sandbox`.
+
+- **Endpoints.** The base URLs are `https://b2b.revolut.com/api/1.0` and `https://sandbox-b2b.revolut.com/api/1.0`, with `Authorization: Bearer <token>`. The adapter calls `GET /accounts` for status and `GET /transactions?from&to&count=1000` for sync. It pages backwards by passing the last item's `created_at` as `to`. All of this was checked against developer.revolut.com.
+- **What gets imported.** Sync fetches from the last sync minus one day, or the last 90 days on the first run. Each leg of a completed, non-exchange transaction becomes one transaction, with `externalId = revolut-biz:<id>:<leg_id>`.
+- **Caveats:**
+  - Access tokens expire after **40 minutes**. Refreshing a token needs a refresh token plus a client-assertion JWT signed with your private key. **That flow is not implemented** (TODO in `business-api.ts`): a 401 returns a 502 telling you to refresh the token.
+  - **Unverified:** the docs list `legs[].amount` and `fee` but do not state the sign convention. The adapter assumes outgoing amounts are negative and the fee is a positive charge (TODO in code).
+
+### `open-banking`: personal accounts (stub)
+
+Personal Revolut accounts cannot be read with a personal token. Revolut's Open Banking (PSD2 AIS) API is only open to **licensed Account Information Service Providers**. In this mode `/revolut/sync` returns **501** with that explanation, and `/revolut/status` reports `connected: false`. To make it work, implement the TODO in `open-banking.ts` against an aggregator such as **GoCardless Bank Account Data** or **Enable Banking** (consent → requisition → accounts → transactions). Until then, use statement import.
+
+## Import / export
+
+`GET /export?format=xlsx|xml&from&to` returns all categories plus the transactions in the range, oldest first. `POST /import` accepts either format back. Import rules:
+
+- **Existing rows are skipped.** A category id, transaction id or `externalId` that already exists is skipped and never overwritten. Re-importing an export imports nothing.
+- **Bad rows don't stop the import.** Each invalid row adds a message with its sheet/row or element number to `errors[]`, and the remaining rows are still imported.
+- **What the counts include.** `imported` and `skipped` count category and transaction rows together.
+- **Round trips are lossless.** Every field of `Category` and `Transaction` survives export → import into an empty database (covered by tests). Built-in categories already exist in any database, so they are skipped rather than overwritten.
+
+### XLSX
+
+| Sheet | Columns (header row; order does not matter on import) |
+|---|---|
+| `Transactions` | `id`, `date` (ISO text), `amount`, `currency`, `merchant`, `categoryId`, `category` (name, informational), `note`, `source`, `externalId`, `items` (JSON array) |
+| `Categories` | `id`, `name`, `icon`, `color`, `isCustom`, `parentId`, `budget` |
+
+For hand-made sheets, only `date`, `amount`, `currency` and `merchant` are required:
+
+- `id` is generated when missing.
+- `source` defaults to `import`.
+- A `category` name can stand in for `categoryId`.
+- Real Excel date cells are accepted.
+
+### XML
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<expenses version="1" exportedAt="2026-10-14T10:00:00.000Z">
+  <categories>
+    <category id="groceries" isCustom="false">
+      <name>Élelmiszer</name><icon>shopping-cart</icon><color>#7c9a7e</color>
+      <budget>80000</budget>                  <!-- optional -->
+      <parentId>…</parentId>                  <!-- optional -->
+    </category>
+  </categories>
+  <transactions>
+    <transaction id="…" source="receipt">     <!-- id optional on import; source defaults to "import" -->
+      <date>2026-10-12T10:30:00.000Z</date>
+      <amount>-4785</amount>                  <!-- negative = expense -->
+      <currency>HUF</currency>
+      <merchant>SPAR</merchant>
+      <categoryId>groceries</categoryId>      <!-- optional -->
+      <note>…</note>                          <!-- optional -->
+      <externalId>…</externalId>              <!-- optional -->
+      <items>                                 <!-- optional -->
+        <item><name>Tej</name><quantity>2</quantity><unitPrice>389</unitPrice><total>778</total></item>
+      </items>
+    </transaction>
+  </transactions>
+</expenses>
+```
+
+Elements with null or absent values are omitted. All values are read as strings and validated with zod, so a merchant called `123` stays a string.
+
+## Layout
+
+```
+src/
+  index.ts            entry (loads .env, listens)
+  app.ts              buildApp(): plugins, error handler, routes; injectable db/ai/revolut for tests
+  config.ts db.ts repository.ts schemas.ts errors.ts
+  ai/                 provider interface + anthropic/openai/ollama/mock adapters, strict JSON parsing
+  services/           receipt.ts (scan prompt + validation), analyze.ts (aggregate + prompt)
+  revolut/            csv.ts, business-api.ts, open-banking.ts, categorize.ts
+  io/                 xlsx.ts, xml.ts, common.ts (shared import pipeline)
+  routes/             core.ts, ai.ts, revolut.ts, io.ts
+test/                 vitest suites (fastify.inject, in-memory SQLite, mock provider)
+```
