@@ -25,12 +25,15 @@ export function ScanPage() {
   const [result, setResult] = useState<ReceiptScanResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const reqId = useRef(0);
 
   // Release the preview blob URL whenever it is replaced, cleared, or the page unmounts.
   useEffect(() => () => { if (preview) URL.revokeObjectURL(preview); }, [preview]);
 
   async function handle(file: File | undefined) {
     if (!file || !backend) return;
+    // A newer file (or Újra) supersedes this scan, so its result never lands under another receipt's photo.
+    const id = ++reqId.current;
     setError(null);
     setResult(null);
     setPreview(file.type.startsWith("image/") ? URL.createObjectURL(file) : null);
@@ -38,15 +41,18 @@ export function ScanPage() {
     try {
       const small = await shrinkImage(file);
       const r = await backend.scanReceipt(small);
+      if (id !== reqId.current) return;
       setResult(r);
       setPhase("done");
     } catch (e) {
+      if (id !== reqId.current) return;
       setError((e as Error).message);
       setPhase("error");
     }
   }
 
   function reset() {
+    reqId.current++;
     setPreview(null);
     setResult(null);
     setError(null);
