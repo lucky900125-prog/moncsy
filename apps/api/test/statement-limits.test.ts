@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MockProvider } from "../src/ai/index.js";
+import { currencyAt } from "../src/statements/formats.js";
 import { parseStatementFile } from "../src/statements/index.js";
 import { multipart, testApp } from "./helpers.js";
 
@@ -40,14 +41,28 @@ describe("text statement limits", () => {
     await app.close();
   });
 
-  it("finds each OFX transaction's currency in one pass, so a CURDEF per transaction is not quadratic", async () => {
+  it("reads an OFX statement with a CURDEF before every transaction, each in its own currency", async () => {
     const tx = (i: number) => `<CURDEF>${i % 2 ? "EUR" : "HUF"}<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20261014<TRNAMT>-${i}.50<FITID>F${i}<NAME>Bolt ${i}</STMTTRN>\n`;
     const ofx = "OFXHEADER:100\n<OFX>" + Array.from({ length: 20_000 }, (_, i) => tx(i)).join("") + "</OFX>";
-    const started = performance.now();
     const r = await parseStatementFile({ filename: "k.ofx", data: Buffer.from(ofx) }, opts, new MockProvider());
-    // Searching every CURDEF for every transaction took 4.4 s here; one pass takes a tenth of that.
-    expect(performance.now() - started).toBeLessThan(2_000);
     expect(r.transactions).toHaveLength(20_000);
     expect(r.transactions.slice(0, 3).map((t) => t.currency)).toEqual(["HUF", "EUR", "HUF"]);
+  });
+
+  it("finds each position's CURDEF in one pass over them, not one search per transaction", () => {
+    // Counted rather than timed: reads of the CURDEF list grow with its length plus the transactions', never with their product.
+    const n = 2000;
+    const list = Array.from({ length: n }, (_, i) => ({ at: i * 10, ccy: i % 2 ? "EUR" : "HUF" }));
+    let reads = 0;
+    const counted = new Proxy(list, {
+      get(target, key, receiver) {
+        if (typeof key === "string" && /^\d+$/.test(key)) reads++;
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const positions = Array.from({ length: n }, (_, i) => i * 10 + 5);
+    expect(currencyAt(positions, counted)).toEqual(list.map((c) => c.ccy));
+    expect(currencyAt([0], counted)).toEqual([null]);
+    expect(reads).toBeLessThan(4 * (n + n));
   });
 });

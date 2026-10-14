@@ -109,16 +109,28 @@ function ofxDate(raw: string, timeZone: string): string {
 }
 
 /** OFX / QFX (Money, Quicken). Version 1 is SGML with unclosed tags, version 2 is XML; both are read tag by tag. */
+/**
+ * The currency in force at each position: the last CURDEF before it. Both lists are in file order, so one pass over the
+ * CURDEFs serves every position; a search per transaction was quadratic.
+ */
+export function currencyAt(positions: readonly number[], curdefs: readonly { at: number; ccy: string }[]): (string | null)[] {
+  let last = -1;
+  return positions.map((at) => {
+    while (last + 1 < curdefs.length && curdefs[last + 1]!.at < at) last++;
+    return last >= 0 ? curdefs[last]!.ccy : null;
+  });
+}
+
 export function parseOfx(text: string, timeZone: string): FormatResult {
   const tag = (block: string, name: string) => block.match(new RegExp(`<${name}>([^<\\r\\n]*)`, "i"))?.[1]?.trim() ?? "";
   // A file can hold several statements (accounts, cards), each with its own CURDEF before its transactions.
   const curdefs = [...text.matchAll(/<CURDEF>\s*([A-Za-z]{3})/gi)].map((m) => ({ at: m.index, ccy: m[1]!.toUpperCase() }));
-  // Both lists are in file order, so one pass finds each transaction's CURDEF; a search per transaction was quadratic.
-  let last = -1;
-  const blocks = [...text.matchAll(/<STMTTRN>([\s\S]*?)(?=<\/STMTTRN>|<STMTTRN>|<\/BANKTRANLIST>)/gi)].map((m) => {
-    while (last + 1 < curdefs.length && curdefs[last + 1]!.at < m.index) last++;
-    return { body: m[1]!, currency: last >= 0 ? curdefs[last]!.ccy : null };
-  });
+  const found = [...text.matchAll(/<STMTTRN>([\s\S]*?)(?=<\/STMTTRN>|<STMTTRN>|<\/BANKTRANLIST>)/gi)];
+  const currencies = currencyAt(
+    found.map((m) => m.index),
+    curdefs,
+  );
+  const blocks = found.map((m, i) => ({ body: m[1]!, currency: currencies[i] ?? null }));
   if (!blocks.length) throw badRequest("No <STMTTRN> transactions found in the OFX file");
   const res: FormatResult = { currency: curdefs[0]?.ccy ?? null, transactions: [], ignored: 0, errors: [] };
   const seen = new Map<string, number>();
