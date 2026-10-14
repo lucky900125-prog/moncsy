@@ -164,7 +164,8 @@ export function productAggregate(txs: Transaction[], from: string, to: string, f
   const active = filter && (filter.q || filter.brand || filter.merchant) ? filter : undefined;
   const stats = buildProductStats(txs).filter((p) => !active || matchesProductFilter(p, active));
   // Products bought in several stores are the comparable ones, so they go first; then the biggest spend.
-  const picked = [...stats.filter((p) => p.cheapest), ...stats.filter((p) => !p.cheapest)].slice(0, MAX_PRODUCTS);
+  const compared = (p: ProductStat) => p.stores.length >= 2;
+  const picked = [...stats.filter(compared), ...stats.filter((p) => !compared(p))].slice(0, MAX_PRODUCTS);
   return {
     from,
     to,

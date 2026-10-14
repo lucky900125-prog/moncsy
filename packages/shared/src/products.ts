@@ -43,7 +43,7 @@ export interface ProductStat {
   spent: number;
   /** cheapest first; compared per baseUnit when known, else per unit */
   stores: StorePrice[];
-  /** set only when the product was bought in at least two stores */
+  /** set only when the product was bought in at least two stores and one of them had the lowest price alone */
   cheapest: string | null;
   /** price difference between the dearest and the cheapest store, per baseUnit or per unit */
   saving: number | null;
@@ -176,6 +176,8 @@ export function buildProductStats(transactions: Transaction[]): ProductStat[] {
     const price = (s: StorePrice) => (g.base ? (s.avgBasePrice ?? s.avgUnitPrice) : s.avgUnitPrice);
     stores.sort((a, b) => price(a) - price(b) || a.store.localeCompare(b.store, "hu"));
     const compared = stores.length >= 2;
+    // Two stores at the same best price: neither is the cheapest.
+    const alone = compared && price(stores[0]!) < price(stores[1]!);
     stats.push({
       key,
       product: capitalize((g.item.product || g.item.name).trim()),
@@ -187,7 +189,7 @@ export function buildProductStats(transactions: Transaction[]): ProductStat[] {
       quantity: round2(history.reduce((s, p) => s + p.quantity, 0)),
       spent: round2(history.reduce((s, p) => s + p.total, 0)),
       stores,
-      cheapest: compared ? stores[0]!.store : null,
+      cheapest: alone ? stores[0]!.store : null,
       saving: compared ? round2(price(stores[stores.length - 1]!) - price(stores[0]!)) : null,
       history,
     });
@@ -199,7 +201,7 @@ export function buildProductStats(transactions: Transaction[]): ProductStat[] {
 export function rankStores(stats: ProductStat[]): StoreRank[] {
   const rank = new Map<string, StoreRank>();
   for (const p of stats) {
-    if (!p.cheapest) continue;
+    if (p.stores.length < 2) continue;
     for (const s of p.stores) {
       const r = rank.get(s.store) ?? { store: s.store, cheapestFor: 0, compared: 0 };
       r.compared++;

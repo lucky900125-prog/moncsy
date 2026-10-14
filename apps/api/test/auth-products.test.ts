@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Transaction } from "@et/shared";
 import { buildProductStats, rankStores, storeName } from "@et/shared/products";
 import { assertSafeExposure, loadConfig } from "../src/config.js";
+import { MockProvider } from "../src/ai/index.js";
 import { productAggregate } from "../src/services/analyze.js";
 import { FAKE_JPEG, multipart, testApp } from "./helpers.js";
 
@@ -139,6 +140,28 @@ describe("products from receipt lines", () => {
     ]);
     expect(stats).toHaveLength(3);
     expect(stats.every((p) => p.cheapest === null)).toBe(true);
+  });
+
+  it("names no cheapest store when the best prices are equal, and still counts the product as compared", async () => {
+    const milk = (price: number) => [{ name: "Tej", quantity: 1, unitPrice: price, total: price, product: "tej", brand: null, packSize: 1, packUnit: "l" as const }];
+    const two = buildProductStats([tx("1", "Spar", "2026-10-01T10:00:00Z", milk(400)), tx("2", "Lidl", "2026-10-02T10:00:00Z", milk(400))]);
+    expect(two[0]).toMatchObject({ cheapest: null, saving: 0 });
+    const txs = [
+      tx("1", "Spar", "2026-10-01T10:00:00Z", milk(400)),
+      tx("2", "Lidl", "2026-10-02T10:00:00Z", milk(400)),
+      tx("3", "Tesco", "2026-10-03T10:00:00Z", milk(500)),
+    ];
+    const three = buildProductStats(txs);
+    expect(three[0]).toMatchObject({ cheapest: null, saving: 100 });
+    expect(rankStores(three)).toEqual([
+      { store: "Lidl", cheapestFor: 0, compared: 1 },
+      { store: "Spar", cheapestFor: 0, compared: 1 },
+      { store: "Tesco", cheapestFor: 0, compared: 1 },
+    ]);
+    // The offline analysis does not call either of the two the cheaper one either.
+    const agg = productAggregate(txs, "2026-10-01", "2026-10-31");
+    const res = JSON.parse(await new MockProvider().complete([{ role: "user", content: `<products>${JSON.stringify(agg)}</products>` }]));
+    expect(res.insights).toEqual([]);
   });
 });
 
