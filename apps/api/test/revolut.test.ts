@@ -75,6 +75,29 @@ CARD_PAYMENT,Current,2026-10-01 08:15:42,2026-10-02 09:01:10,Spar 5" cable,-4785
     }
     await app.close();
   });
+
+  it("reads a statement Excel saved again as a Hungarian CSV (semicolons, decimal commas, Hungarian dates)", async () => {
+    const csv = `Type;Product;Started Date;Completed Date;Description;Amount;Fee;Currency;State;Balance
+CARD_PAYMENT;Current;2026. 10. 01. 8:15;2026. 10. 02. 9:01;Spar;-4785;0;HUF;COMPLETED;120215
+CARD_PAYMENT;Current;2026-10-03 12:00:00;2026-10-03 12:00:00;Lidl;-12,5;0;EUR;COMPLETED;87,5
+`;
+    const { rows, errors } = parseStatementCsv(csv);
+    expect(errors).toEqual([]);
+    expect(rows.map((r) => [r.description, r.amount, r.completedDate])).toEqual([
+      ["Spar", -4785, "2026-10-02T07:01:00.000Z"],
+      ["Lidl", -12.5, "2026-10-03T10:00:00.000Z"],
+    ]);
+
+    const app = await testApp();
+    const preview = await app.inject({ method: "POST", url: "/api/statements/parse", ...multipart("statement.csv", "text/csv", csv) });
+    expect(preview.statusCode, preview.body).toBe(200);
+    expect(preview.json()).toMatchObject({ format: "revolut", errors: [] });
+    expect(preview.json().transactions).toHaveLength(2);
+    const imported = await app.inject({ method: "POST", url: "/api/revolut/import-statement", ...multipart("statement.csv", "text/csv", csv) });
+    expect(imported.statusCode, imported.body).toBe(200);
+    expect(imported.json()).toMatchObject({ imported: 2, skipped: 0, errors: [] });
+    await app.close();
+  });
 });
 
 describe("POST /api/revolut/import-statement", () => {

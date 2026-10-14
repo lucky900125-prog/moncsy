@@ -59,6 +59,22 @@ describe("statement values", () => {
     expect(detectDelimiter("a\tb\n1\t2\n")).toBe("\t");
   });
 
+  it("reads Excel's Unicode text (UTF-16 with a byte order mark), also when it is named .xls", async () => {
+    const text = "Dátum\tÖsszeg\tPartner\r\n2026.10.14.\t-4 785\tŐrség Kft.\r\n";
+    const le = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")]);
+    const be = Buffer.from(le).swap16();
+    expect(decodeText(le)).toBe(text);
+    expect(decodeText(be)).toBe(text);
+    for (const [name, data] of [["kivonat.txt", le], ["kivonat.xls", le], ["kivonat.csv", be]] as const) {
+      const r = await parse(name, data);
+      expect(r.errors, name).toEqual([]);
+      expect(r.transactions.map((t) => [t.merchant, t.amount]), name).toEqual([["Őrség Kft.", -4785]]);
+    }
+    // Old Excel saved as a web page is still refused, whatever its encoding.
+    const html = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("<html><table></table></html>", "utf16le")]);
+    await expect(parse("old.xls", html)).rejects.toThrow(/save it as \.xlsx or \.csv/);
+  });
+
   it("maps Hungarian and English header names to roles", () => {
     expect(detectMapping(["Könyvelés dátuma", "Értéknap", "Összeg (HUF)", "Partner neve", "Közlemény", "Egyenleg"])).toEqual({
       date: "Könyvelés dátuma",
