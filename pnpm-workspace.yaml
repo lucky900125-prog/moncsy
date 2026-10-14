@@ -1,3 +1,12 @@
 packages:
   - "apps/*"
   - "packages/*"
+
+# Supply chain (architect's CI-04; settings checked against pnpm.io/10.x/settings).
+# A dependency's install script runs only when it is listed here, and an unlisted one fails the install instead of
+# being skipped in silence. esbuild's script only fetches its binary, which pnpm installs as an optional dependency.
+strictDepBuilds: true
+allowBuilds:
+  esbuild: false
+# A version is resolved only after it has been public for a day (minutes), long enough for most hijacked releases to be pulled.
+minimumReleaseAge: 1440
