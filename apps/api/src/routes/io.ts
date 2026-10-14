@@ -9,7 +9,7 @@ import { exportQuerySchema, parseOrThrow } from "../schemas.js";
 export async function ioRoutes(app: FastifyInstance, { repo }: AppDeps): Promise<void> {
   app.post("/import", async (req) => {
     const file = await readUpload(req);
-    const head = file.data.subarray(0, 64).toString("utf8").replace(/^﻿/, "").trimStart();
+    const head = file.data.subarray(0, 64).toString("utf8").replace(/^\uFEFF/, "").trimStart();
     const isZip = file.data.subarray(0, 2).toString("latin1") === "PK";
     let payload;
     if (/\.xlsx$/i.test(file.filename) || isZip) payload = await parseXlsx(file.data);

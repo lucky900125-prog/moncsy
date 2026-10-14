@@ -9,7 +9,7 @@ const RULES: [DefaultCategoryId, RegExp][] = [
   ["groceries", /\b(spar|interspar|tesco|lidl|aldi|auchan|penny|coop|cba|prima|real|kifli\.?hu|match|fresh ?market|nagybani|piac|grocery|supermarket|elelmiszer)\b/],
   ["transport", /\b(bkk|bkv|mav|volan|uber|bolt|freenow|taxi|mol|omv|shell|lukoil|parkolas|parking|nemzeti mobilfizetesi|e-?matrica|autopalya)\b/],
   ["subscriptions", /\b(netflix|spotify|youtube|disney|hbo|max\.com|apple\.com|icloud|google (one|storage|play)|microsoft|xbox game pass|chatgpt|openai|anthropic|claude\.ai|github|dropbox|adobe|patreon|duolingo)\b/],
-  ["utilities", /\b(mvm|elmu|emasz|fogaz|fotav|dijnet|vizmu|vizművek|digi|telekom|vodafone|yettel|one hungary|upc|internet|aram|gaz)\b/],
+  ["utilities", /\b(mvm|elmu|emasz|fogaz|fotav|dijnet|vizmu|vizmuvek|digi|telekom|vodafone|yettel|one hungary|upc|internet|aram|gaz)\b/],
   ["housing", /\b(alberlet|berleti dij|rent|kozos koltseg|tarsashaz|ikea|obi|praktiker|bauhaus|jysk|mobelix)\b/],
   ["health", /\b(patika|gyogyszertar|pharmacy|benu|dm|rossmann|fogorvos|dentist|orvos|klinika|medicover|labor)\b/],
   ["clothing", /\b(h&m|h & m|zara|reserved|deichmann|decathlon|about you|c&a|pull&bear|bershka|primark|sinsay|mango|zalando|humanic)\b/],
@@ -21,7 +21,7 @@ const strip = (s: string) =>
   s
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "");
+    .replace(/[\u0300-\u036f]/g, ""); // combining diacritical marks
 
 export function categorize(description: string, amount: number, type?: string): DefaultCategoryId | null {
   const text = strip(description);

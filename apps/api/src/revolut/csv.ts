@@ -95,9 +95,8 @@ function toNum(v: unknown, field: string, required: boolean): number | null {
   return n;
 }
 
-function normalizeRecords(records: Record<string, unknown>[]): { rows: StatementRow[]; errors: string[] } {
-  if (records.length === 0) return { rows: [], errors: [] };
-  const keys = Object.keys(records[0]!);
+/** Validates the header first, so an empty statement is told apart from a file that is not a statement at all. */
+function normalizeRecords(records: Record<string, unknown>[], keys: string[]): { rows: StatementRow[]; errors: string[] } {
   const find = (field: keyof StatementRow) => keys.find((k) => HEADER_ALIASES[field].includes(k.trim().toLowerCase()));
   const col = Object.fromEntries((Object.keys(HEADER_ALIASES) as (keyof StatementRow)[]).map((f) => [f, find(f)])) as Record<
     keyof StatementRow,
@@ -135,11 +134,12 @@ function normalizeRecords(records: Record<string, unknown>[]): { rows: Statement
 }
 
 export function parseStatementCsv(text: string): { rows: StatementRow[]; errors: string[] } {
+  const header = (parse(text, { bom: true, skip_empty_lines: true, trim: true, to_line: 1 }) as string[][])[0] ?? [];
   const records = parse(text, { columns: true, bom: true, skip_empty_lines: true, trim: true, relax_column_count: true }) as Record<
     string,
     unknown
   >[];
-  return normalizeRecords(records);
+  return normalizeRecords(records, header);
 }
 
 export async function parseStatementXlsx(buf: Buffer): Promise<{ rows: StatementRow[]; errors: string[] }> {
@@ -165,9 +165,7 @@ export async function parseStatementXlsx(buf: Buffer): Promise<{ rows: Statement
     });
     if (Object.values(rec).some((v) => v !== null && v !== undefined && v !== "")) records.push(rec);
   });
-  if (records.length === 0 && header.length) records.push(Object.fromEntries(header.filter(Boolean).map((h) => [h, ""])));
-  const out = normalizeRecords(records);
-  return { rows: out.rows.filter((r) => r.description || r.amount), errors: out.errors };
+  return normalizeRecords(records, header.filter(Boolean));
 }
 
 /** externalId = hash of date + amount + description (an occurrence suffix separates identical rows in one file). */
