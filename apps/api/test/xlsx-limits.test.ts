@@ -7,12 +7,15 @@ import { UnpackedTooLargeError, assertUnpackedSize } from "../src/io/zip.js";
 import { parseStatementFile } from "../src/statements/index.js";
 import { multipart, testApp } from "./helpers.js";
 
-/** A ZIP archive of deflated entries: local headers, then the central directory, then its end record. */
-function zip(entries: [string, Buffer][]): Buffer {
+/**
+ * A ZIP archive of deflated entries: local headers, then the central directory, then its end record. An entry may carry
+ * a central extra field; declaredCount is the entry count the end record states.
+ */
+function zip(entries: [string, Buffer, Buffer?][], declaredCount = entries.length): Buffer {
   const locals: Buffer[] = [];
   const central: Buffer[] = [];
   let offset = 0;
-  for (const [name, data] of entries) {
+  for (const [name, data, extra = Buffer.alloc(0)] of entries) {
     const body = deflateRawSync(data);
     const fname = Buffer.from(name);
     const local = Buffer.alloc(30);
@@ -32,16 +35,17 @@ function zip(entries: [string, Buffer][]): Buffer {
     dir.writeUInt32LE(body.length, 20);
     dir.writeUInt32LE(data.length, 24);
     dir.writeUInt16LE(fname.length, 28);
+    dir.writeUInt16LE(extra.length, 30);
     dir.writeUInt32LE(offset, 42);
     locals.push(local, fname, body);
-    central.push(dir, fname);
+    central.push(dir, fname, extra);
     offset += local.length + fname.length + body.length;
   }
   const dirBytes = Buffer.concat(central);
   const end = Buffer.alloc(22);
   end.writeUInt32LE(0x06054b50, 0);
-  end.writeUInt16LE(entries.length, 8);
-  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt16LE(declaredCount, 8);
+  end.writeUInt16LE(declaredCount, 10);
   end.writeUInt32LE(dirBytes.length, 12);
   end.writeUInt32LE(offset, 16);
   return Buffer.concat([...locals, dirBytes, end]);
@@ -86,6 +90,50 @@ const amplifiers: [string, () => Promise<Buffer>, RegExp][] = [
   // More than the reading thread holds beside the data, so refused with a message rather than after running out.
   ["a validation over a whole column", () => rewritten(SHEET, validation("D1:D1048576")), /has data validation on 1048576 cells/],
   ["a defined name over the whole sheet", () => rewritten("xl/workbook.xml", name("$A$1:$XFD$1048576")), /defined names cover \d+ cells/],
+];
+
+/**
+ * The whole-sheet merge and name, and a far column range, written in forms ExcelJS and JSZip read the same as the plain
+ * ones (each checked against ExcelJS 4.4.0 with a small range): the pre-filter has to read them as they do.
+ */
+const WHOLE = "A52:XFD1048576";
+const mergeTag = (attributes: string) => (x: string) => x.replace("</sheetData>", `</sheetData><mergeCells count="1"><mergeCell ${attributes}/></mergeCells>`);
+/** The workbook with its sheet's merge as given, the sheet then stored under another name in the ZIP. */
+const sheetEntry = async (edit: (x: string) => string, entry: (data: Buffer) => [string, Buffer, Buffer?]) =>
+  zip(unzip(await rewritten(SHEET, edit)).map(([n, d]) => (n === SHEET ? entry(d) : [n, d])));
+/** An Info-ZIP Unicode Path extra field (0x7075): JSZip takes the entry's name from it when its CRC matches the raw name. */
+const unicodePath = (raw: string, name: string) => {
+  const u = Buffer.from(name);
+  const field = Buffer.alloc(9 + u.length);
+  field.writeUInt16LE(0x7075, 0);
+  field.writeUInt16LE(5 + u.length, 2);
+  field.writeUInt8(1, 4);
+  field.writeUInt32LE(crc32(Buffer.from(raw)), 5);
+  u.copy(field, 9);
+  return field;
+};
+const MERGES = /^The XLSX file merges \d+ cells/;
+const NAMES = /^The XLSX file's defined names cover \d+ cells/;
+const disguised: [string, () => Promise<Buffer>, RegExp][] = [
+  ["single quotes", () => rewritten(SHEET, mergeTag(`ref='${WHOLE}'`)), MERGES],
+  ["spaces around =", () => rewritten(SHEET, mergeTag(`ref = "${WHOLE}"`)), MERGES],
+  ["a character reference", () => rewritten(SHEET, mergeTag('ref="A52:&#88;F&#x44;1048576"')), MERGES],
+  ["a > in an attribute before it", () => rewritten(SHEET, mergeTag(`x='>' ref="${WHOLE}"`)), MERGES],
+  ["ref= in the value of an attribute before it", () => rewritten(SHEET, mergeTag(`x='ref="A1"' ref="${WHOLE}"`)), MERGES],
+  ["a part name with a leading /", () => sheetEntry(merge(WHOLE), (d) => [`/${SHEET}`, d]), MERGES],
+  ["a part name from a Unicode path field", () => sheetEntry(merge(WHOLE), (d) => ["zz.bin", d, unicodePath("zz.bin", SHEET)]), MERGES],
+  [
+    "a sheet after the entries the end record counts",
+    async () => {
+      const entries = unzip(await rewritten(SHEET, merge(WHOLE)));
+      const sheet = entries.splice(entries.findIndex(([n]) => n === SHEET), 1);
+      return zip([...entries, ...sheet], entries.length);
+    },
+    MERGES,
+  ],
+  ["a column range that starts far out", () => rewritten(SHEET, (x) => x.replace("<sheetData>", '<cols><col min="50000000" max="1"/></cols><sheetData>')), /describes column 50000000/],
+  ["a defined name split by a comment", () => rewritten("xl/workbook.xml", name("$A$1<!-- - -->:$XFD$1048576")), NAMES],
+  ["a defined name with character references", () => rewritten("xl/workbook.xml", name("$A$1:&#36;XFD&#36;1048576")), NAMES],
 ];
 
 /** A few kilobytes that unpack to more than the limit, as a worksheet. */
@@ -157,6 +205,18 @@ describe("uploaded XLSX limits", () => {
     );
     expect((await parse(usual)).transactions).toHaveLength(50);
     await app.close();
+  });
+
+  it.each(disguised)("refuses a whole-sheet range before reading it when it is written with %s", async (_what, build, message) => {
+    await expect(parse(await build())).rejects.toThrow(message);
+  });
+
+  it("measures an entry after the ones the end record counts, as JSZip loads it", async () => {
+    const normal = unzip(await statementWorkbook(() => {}));
+    const behind = zip([...normal, ["xl/worksheets/sheet2.xml", Buffer.alloc(MAX_XLSX_UNPACKED_BYTES + 1024 * 1024, " ")]], normal.length);
+    expect(() => assertUnpackedSize(behind, MAX_XLSX_UNPACKED_BYTES)).toThrow(UnpackedTooLargeError);
+    // An end record that counts more entries than the directory has is still a damaged archive.
+    expect(() => assertUnpackedSize(zip(normal, normal.length + 1), MAX_XLSX_UNPACKED_BYTES)).toThrow(/damaged ZIP directory/);
   });
 
   it("reads a workbook in a thread whose memory runs out instead of the server's", async () => {

@@ -28,8 +28,13 @@ export function assertUnpackedSize(data: Buffer, maxBytes: number, visit?: (name
   const count = data.readUInt16LE(eocd + 10);
   let p = data.readUInt32LE(eocd + 16);
   let total = 0;
-  for (let n = 0; n < count; n++) {
-    if (p + 46 > data.length || data.readUInt32LE(p) !== CENTRAL) throw new Error("damaged ZIP directory");
+  // JSZip, which ExcelJS reads with, takes central entries for as long as their signature follows, whatever count the
+  // end record states; stopping at that count would leave an entry it loads unmeasured.
+  for (let n = 0; ; n++) {
+    if (p + 46 > data.length || data.readUInt32LE(p) !== CENTRAL) {
+      if (n < count) throw new Error("damaged ZIP directory");
+      break;
+    }
     const method = data.readUInt16LE(p + 10);
     const compressed = data.readUInt32LE(p + 20);
     const local = data.readUInt32LE(p + 42);
