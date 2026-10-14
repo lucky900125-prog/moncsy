@@ -60,7 +60,11 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
   if (opts.backup) {
     deps.backup = new BackupScheduler(db, opts.backup, { info: (m) => app.log.info(m), error: (m) => app.log.error(m) });
   }
-  await app.register(cors, { origin: config.corsOrigin === "*" ? true : config.corsOrigin.split(",").map((s) => s.trim()) });
+  await app.register(cors, {
+    origin: config.corsOrigin === "*" ? true : config.corsOrigin.split(",").map((s) => s.trim()),
+    // @fastify/cors allows only GET, HEAD and POST by default; a cross-origin web client also edits and deletes.
+    methods: ["GET", "HEAD", "POST", "PATCH", "DELETE"],
+  });
   await app.register(multipart, { limits: { fileSize: MAX_UPLOAD_BYTES, files: 1, fields: 10 } });
 
   app.setErrorHandler((err: Error & { statusCode?: number; code?: string }, req, reply) => {

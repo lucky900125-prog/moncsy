@@ -34,6 +34,14 @@ describe("API token", () => {
       headers: { origin: "http://localhost:5173", "access-control-request-method": "GET", "access-control-request-headers": "authorization" },
     });
     expect(pre.statusCode).toBe(204);
+    // The deployed web app runs on another origin, so edits and deletes need the preflight to allow them.
+    const preDelete = await app.inject({
+      method: "OPTIONS",
+      url: "/api/transactions/x",
+      headers: { origin: "http://localhost:5173", "access-control-request-method": "DELETE", "access-control-request-headers": "authorization" },
+    });
+    expect(preDelete.headers["access-control-allow-methods"]).toMatch(/PATCH/);
+    expect(preDelete.headers["access-control-allow-methods"]).toMatch(/DELETE/);
     await app.close();
   });
 
