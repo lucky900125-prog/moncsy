@@ -17,3 +17,10 @@ pnpm --filter @et/mobile start
 ```
 
 Ha az API nem érhető el, a web „Demó mód”-ban fut böngészőben tárolt mintaadatokkal.
+
+## Élő demó
+
+A `main` minden pusha után a GitHub Actions kiteszi a webappot GitHub Pages-re: https://lucky900125-prog.github.io/moncsy/ .
+Ott nincs API, így demó módban fut (mintaadatok a böngészőben; a blokkfelismerés és az elemzés fix mintaeredményt ad).
+Egyszeri beállítás a repóban: Settings → Pages → Source: „GitHub Actions”.
+

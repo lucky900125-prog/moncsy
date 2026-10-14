@@ -20,7 +20,7 @@ const MOBILE_NAV = ["/", "/tetelek", "/blokk", "/elemzes", "/beallitasok"];
 function Logo() {
   return (
     <div className="flex items-center gap-2.5 px-2">
-      <img src="/icon.svg" alt="" className="size-8 rounded-lg" />
+      <img src={`${import.meta.env.BASE_URL}icon.svg`} alt="" className="size-8 rounded-lg" />
       <span className="text-[15px] font-semibold tracking-tight">moncsy</span>
     </div>
   );

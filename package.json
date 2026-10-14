@@ -6,5 +6,6 @@
     "dev:api": "pnpm --filter @et/api dev",
     "build": "pnpm -r build",
     "test": "pnpm -r test"
-  }
+  },
+  "packageManager": "pnpm@10.28.0"
 }
