@@ -8,7 +8,20 @@ services:
     plan: free
     region: frankfurt
     branch: main
+    # Once GitHub is connected to Render, `checksPass` here makes a deploy wait for CI on main (architect's CI-01).
     autoDeployTrigger: commit
+    # Only a change that reaches the API deploys it. A deploy runs the old and the new instance side by side for a while,
+    # and two instances writing stops the backup of one (apps/api/README.md, "Off-site backup"); a web-only push need
+    # not risk that. The root manifest, lockfile and workspace file decide what the build installs.
+    buildFilter:
+      paths:
+        - apps/api/**
+        - packages/shared/**
+        - render.yaml
+        - .node-version
+        - package.json
+        - pnpm-lock.yaml
+        - pnpm-workspace.yaml
     # pnpm is pinned to the version in package.json "packageManager"; the lockfile needs pnpm 9 or newer.
     buildCommand: npx --yes pnpm@10.28.0 install --frozen-lockfile && npx --yes pnpm@10.28.0 --filter @et/api build
     startCommand: cd apps/api && node --conditions=et-dist --disable-warning=ExperimentalWarning dist/index.js

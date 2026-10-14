@@ -110,6 +110,15 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
       }
       if (deps.backup) {
         const backup = deps.backup;
+        // Once uploads stop, a write would exist only on this disk, which a host without a persistent disk wipes on
+        // restart; refusing it keeps the loss to what the client still has. Reads and the export keep working, so the
+        // data can be saved by hand. Registered after the token check, so only the owner learns that it stopped.
+        api.addHook("onRequest", async (req, reply) => {
+          if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return;
+          const status = backup.getStatus();
+          if (!status.stopped) return;
+          return reply.status(503).send({ error: `Changes are not saved: the backup has stopped (${status.lastError}). Reading and GET /api/export still work.` });
+        });
         // Anything but a read may have written; the scheduler uploads only if the database actually changed.
         // A refused request wrote nothing, and letting it touch would let anyone keep postponing the backup.
         // onSend, not onResponse: onResponse never runs when the client went away before the response, though the write stands.

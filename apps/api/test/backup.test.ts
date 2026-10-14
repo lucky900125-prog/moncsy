@@ -216,6 +216,46 @@ describe("backup and restore through the API", () => {
     expect(gh.state.puts).toBe(1);
   });
 
+  it("refuses every write once the backup has stopped, and still serves reads and the export", async () => {
+    const gh = fakeGithub();
+    vi.stubGlobal("fetch", gh.fetchImpl);
+    const first = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath: tempDb() } });
+    await first.inject({ method: "POST", url: "/api/categories", payload: { name: "Eredeti", icon: "x", color: "#123456" } });
+    await first.close();
+
+    const app = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath: tempDb(), apiToken: "right" } });
+    const headers = { authorization: "Bearer right" };
+    const tx = { date: "2026-10-14", amount: -100, currency: "HUF", merchant: "Spar", categoryId: null, source: "manual" };
+    const created = await app.inject({ method: "POST", url: "/api/transactions", headers, payload: tx });
+    expect(created.statusCode).toBe(201);
+    const id = created.json().id as string;
+    await app.deps.backup!.flush();
+    expect(app.deps.backup!.getStatus()).toMatchObject({ stopped: true });
+
+    // Whatever is written now exists only on a disk the host wipes on restart, so nothing is accepted.
+    const writes = [
+      { method: "POST" as const, url: "/api/transactions", payload: tx },
+      { method: "PATCH" as const, url: `/api/transactions/${id}`, payload: { merchant: "Lidl" } },
+      { method: "DELETE" as const, url: `/api/transactions/${id}` },
+      { method: "POST" as const, url: "/api/categories", payload: { name: "Új", icon: "x", color: "#123456" } },
+      { method: "POST" as const, url: "/api/statements/import", payload: { transactions: [] } },
+    ];
+    for (const w of writes) {
+      const res = await app.inject({ ...w, headers });
+      expect(res.statusCode, `${w.method} ${w.url}`).toBe(503);
+      expect(res.json().error).toMatch(/^Changes are not saved: the backup has stopped \(.*was not restored from it.*\)/);
+    }
+    expect((await app.inject({ url: "/api/transactions", headers })).json()).toMatchObject([{ id, merchant: "Spar" }]);
+    // Without the right token the answer is the usual 401, which says nothing about the backup.
+    expect((await app.inject({ method: "POST", url: "/api/transactions", headers: { authorization: "Bearer nope" }, payload: tx })).statusCode).toBe(401);
+    // Reading, the status and the export still work, so the data on this disk can be saved by hand.
+    expect((await app.inject({ url: "/api/backup/status", headers })).json()).toMatchObject({ stopped: true });
+    expect((await app.inject({ url: "/api/export?format=xml", headers })).statusCode).toBe(200);
+    expect((await app.inject("/api/health")).statusCode).toBe(200);
+    await app.close();
+    expect(gh.state.puts).toBe(1);
+  });
+
   it("refuses to start empty when the copy cannot be read", async () => {
     const gh = fakeGithub();
     vi.stubGlobal("fetch", gh.fetchImpl);
