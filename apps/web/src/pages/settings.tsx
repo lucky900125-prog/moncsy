@@ -28,7 +28,7 @@ function reportImport(r: ImportResult) {
 }
 
 export function SettingsPage() {
-  const { backend, refresh } = useApp();
+  const { backend, status, error, refresh } = useApp();
   const [theme, setThemeState] = useState<Theme>(getTheme);
   const [apiUrl, setApiUrl] = useState(getApiUrlSetting);
   const [token, setToken] = useState(getApiToken);
@@ -162,11 +162,10 @@ export function SettingsPage() {
       <Card>
         <CardHeader className="flex-row items-center justify-between">
           <CardTitle className="flex items-center gap-2"><Server className="size-4" /> Kapcsolat</CardTitle>
-          <Badge className={backend?.mode === "api" ? "bg-accent text-accent-foreground" : "bg-amber-500/10 text-amber-700 dark:text-amber-300"}>
-            {backend?.mode === "api" ? "API csatlakoztatva" : "Demó mód"}
-          </Badge>
+          <ConnectionBadge demo={backend?.mode === "demo"} status={status} />
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
+          {status === "error" && <p className="text-sm text-destructive">{error}</p>}
           {backend?.mode === "demo" && (
             <p className="text-sm text-muted-foreground">Az API nem válaszolt, ezért a böngészőben tárolt demó adatokkal fut. Az import, export és a Revolut az API-t igényli.</p>
           )}
@@ -228,6 +227,18 @@ export function SettingsPage() {
       </Card>
     </div>
   );
+}
+
+/** Follows the load, not only the detected mode: the API mode is also picked when the saved address does not answer. */
+function ConnectionBadge({ demo, status }: { demo: boolean; status: "loading" | "ready" | "error" }) {
+  const [label, tone] = demo
+    ? ["Demó mód", "bg-amber-500/10 text-amber-700 dark:text-amber-300"]
+    : status === "error"
+      ? ["Kapcsolódási hiba", "bg-destructive/10 text-destructive"]
+      : status === "loading"
+        ? ["Kapcsolódás…", "bg-muted text-muted-foreground"]
+        : ["API csatlakoztatva", "bg-accent text-accent-foreground"];
+  return <Badge className={tone}>{label}</Badge>;
 }
 
 // Browser storage is per origin, and every Pages site of a GitHub account is served from <account>.github.io.
