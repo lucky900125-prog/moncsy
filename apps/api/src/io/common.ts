@@ -105,7 +105,9 @@ export async function applyImport(repo: Repository, payload: ImportPayload): Pro
       res.imported++;
     }
     for (const [id, parentId, where] of parents) {
-      if (!(await repo.getCategory(parentId))) res.errors.push(`${where}: parentId "${parentId}" not found; imported without parent`);
+      // updateCategory refuses a self-parent by throwing, which would roll back the whole import.
+      if (parentId === id) res.errors.push(`${where}: a category cannot be its own parent; imported without parent`);
+      else if (!(await repo.getCategory(parentId))) res.errors.push(`${where}: parentId "${parentId}" not found; imported without parent`);
       else await repo.updateCategory(id, { parentId });
     }
 

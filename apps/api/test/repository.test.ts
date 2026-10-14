@@ -91,6 +91,23 @@ describe("transactions", () => {
   });
 });
 
+describe("db", () => {
+  it("runs a query issued while a transaction is about to start outside it, not inside it", async () => {
+    const db = await openDb(":memory:");
+    await db.exec("CREATE TABLE t (v TEXT)");
+    const failing = db.tx(async (t) => {
+      await t.run("INSERT INTO t VALUES ('in tx')");
+      await t.run("SELECT 1");
+      throw new Error("tx fails");
+    });
+    // Issued in the same turn as the transaction: it must not be swept into it and rolled back with it.
+    expect(await db.run("INSERT INTO t VALUES ('outside')")).toEqual({ changes: 1 });
+    await expect(failing).rejects.toThrow("tx fails");
+    expect(await db.all("SELECT v FROM t")).toEqual([{ v: "outside" }]);
+    db.close();
+  });
+});
+
 describe("HTTP CRUD", () => {
   it("serves the category and transaction endpoints", async () => {
     const app = await testApp();

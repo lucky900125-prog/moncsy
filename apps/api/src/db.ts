@@ -28,55 +28,70 @@ export interface DB {
 class SqliteDb implements DB {
   private queue: Promise<unknown> = Promise.resolve();
   private active: Promise<unknown> | null = null;
+  /** the failure after which SQLite ended the open transaction by itself */
+  private aborted: Error | null = null;
 
   constructor(private readonly db: DatabaseSync) {}
 
-  private async idle(): Promise<void> {
+  /** Runs f once no transaction is open. The last check and f run in the same turn, so no transaction can begin in between. */
+  private async whenIdle<T>(f: () => T): Promise<T> {
     while (this.active) await this.active.catch(() => undefined);
+    return f();
+  }
+
+  /** Inside tx(): after disk full, an I/O error or out of memory SQLite ends the transaction itself, and a later statement must not autocommit. */
+  private inTx<T>(f: (db: DatabaseSync) => T): T {
+    if (!this.db.isTransaction) {
+      throw new Error(`the transaction was rolled back by SQLite after an earlier error: ${this.aborted?.message ?? "unknown"}`, { cause: this.aborted ?? undefined });
+    }
+    try {
+      return f(this.db);
+    } catch (e) {
+      if (!this.db.isTransaction) this.aborted ??= e as Error;
+      throw e;
+    }
   }
 
   private bound(): DB {
     const self = this;
     const direct: DB = {
-      all: async <T>(sql: string, args: SqlArgs = []) => self.db.prepare(sql).all(...args) as T[],
-      get: async <T>(sql: string, args: SqlArgs = []) => self.db.prepare(sql).get(...args) as T | undefined,
-      run: async (sql: string, args: SqlArgs = []) => ({ changes: Number(self.db.prepare(sql).run(...args).changes) }),
-      exec: async (sql: string) => void self.db.exec(sql),
+      all: async <T>(sql: string, args: SqlArgs = []) => self.inTx((d) => d.prepare(sql).all(...args) as T[]),
+      get: async <T>(sql: string, args: SqlArgs = []) => self.inTx((d) => d.prepare(sql).get(...args) as T | undefined),
+      run: async (sql: string, args: SqlArgs = []) => self.inTx((d) => ({ changes: Number(d.prepare(sql).run(...args).changes) })),
+      exec: async (sql: string) => self.inTx((d) => void d.exec(sql)),
       tx: (fn) => fn(direct),
       close: () => self.close(),
     };
     return direct;
   }
 
-  async all<T>(sql: string, args: SqlArgs = []): Promise<T[]> {
-    await this.idle();
-    return this.db.prepare(sql).all(...args) as T[];
+  all<T>(sql: string, args: SqlArgs = []): Promise<T[]> {
+    return this.whenIdle(() => this.db.prepare(sql).all(...args) as T[]);
   }
 
-  async get<T>(sql: string, args: SqlArgs = []): Promise<T | undefined> {
-    await this.idle();
-    return this.db.prepare(sql).get(...args) as T | undefined;
+  get<T>(sql: string, args: SqlArgs = []): Promise<T | undefined> {
+    return this.whenIdle(() => this.db.prepare(sql).get(...args) as T | undefined);
   }
 
-  async run(sql: string, args: SqlArgs = []): Promise<{ changes: number }> {
-    await this.idle();
-    return { changes: Number(this.db.prepare(sql).run(...args).changes) };
+  run(sql: string, args: SqlArgs = []): Promise<{ changes: number }> {
+    return this.whenIdle(() => ({ changes: Number(this.db.prepare(sql).run(...args).changes) }));
   }
 
-  async exec(sql: string): Promise<void> {
-    await this.idle();
-    this.db.exec(sql);
+  exec(sql: string): Promise<void> {
+    return this.whenIdle(() => void this.db.exec(sql));
   }
 
   tx<T>(fn: (db: DB) => Promise<T>): Promise<T> {
     const run = async () => {
       this.db.exec("BEGIN IMMEDIATE");
+      this.aborted = null;
       try {
         const out = await fn(this.bound());
-        this.db.exec("COMMIT");
+        this.inTx((d) => d.exec("COMMIT"));
         return out;
       } catch (e) {
-        this.db.exec("ROLLBACK");
+        // If SQLite has already rolled back, ROLLBACK would throw and hide e.
+        if (this.db.isTransaction) this.db.exec("ROLLBACK");
         throw e;
       }
     };

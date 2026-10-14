@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import ExcelJS from "exceljs";
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
@@ -96,6 +99,48 @@ describe("import errors", () => {
     expect(r.errors[0]).toMatch(/Transactions row 3: amount/);
     expect(r.errors[1]).toMatch(/Transactions row 4: unknown category "Nincs ilyen"/);
     expect((await repo.listTransactions())[0]).toMatchObject({ merchant: "Wolt", categoryId: "restaurant", date: "2026-10-04T09:00:00.000Z" });
+  });
+
+  it("reports a category that is its own parent as a row error and imports the rest", async () => {
+    const xml = `<?xml version="1.0"?>
+<expenses version="1">
+  <categories>
+    <category id="loop"><name>Hurok</name><icon>x</icon><color>#123456</color><parentId>loop</parentId></category>
+    <category id="ok"><name>Rendes</name><icon>x</icon><color>#123456</color></category>
+  </categories>
+  <transactions>
+    <transaction><date>2026-10-01</date><amount>-100</amount><currency>HUF</currency><merchant>OK</merchant></transaction>
+  </transactions>
+</expenses>`;
+    const repo = new Repository(await openDb(":memory:"));
+    const r = await applyImport(repo, parseXml(xml));
+    expect(r).toMatchObject({ imported: 3, skipped: 0 });
+    expect(r.errors).toEqual([expect.stringMatching(/cannot be its own parent; imported without parent/)]);
+    expect(await repo.getCategory("loop")).toMatchObject({ name: "Hurok", parentId: null });
+    expect(await repo.listTransactions()).toHaveLength(1);
+  });
+
+  it("commits nothing when SQLite rolls the import back by itself, and says why", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "moncsy-full-"));
+    try {
+      const db = await openDb(join(dir, "full.db"));
+      const repo = new Repository(db);
+      const pages = (await db.get<{ page_count: number }>("PRAGMA page_count"))!.page_count;
+      // A real SQLITE_FULL, as on a nearly full disk: the file may grow by only a few pages.
+      await db.get(`PRAGMA max_page_count = ${pages + 20}`);
+      const row = (merchant: string, extra: Record<string, unknown> = {}) => ({
+        where: merchant,
+        data: { amount: "-1", currency: "HUF", date: "2026-10-01", merchant, ...extra },
+      });
+      const items = Array.from({ length: 400 }, () => ({ name: "x".repeat(500), quantity: 1, unitPrice: 1, total: 1 }));
+      const payload = { categories: [], transactions: [row("before"), row("too big", { items }), row("after-1"), row("after-2")] };
+      await expect(applyImport(repo, payload)).rejects.toThrow(/rolled back by SQLite after an earlier error: database or disk is full/);
+      await db.get("PRAGMA max_page_count = 1073741823");
+      expect(await repo.listTransactions()).toEqual([]);
+      db.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("rejects malformed XML with a 400", async () => {
