@@ -107,7 +107,8 @@ interface MockProducts {
 
 function mockProducts(a: MockProducts) {
   const compared = a.products.filter((p) => p.stores.length >= 2);
-  const insights = compared.slice(0, 5).map((p) => {
+  // Equal best prices name no store.
+  const insights = compared.filter((p) => p.stores[0]!.avgPrice < p.stores[1]!.avgPrice).slice(0, 5).map((p) => {
     const lo = p.stores[0]!;
     const hi = p.stores[p.stores.length - 1]!;
     const unit = p.priceUnit === "package" ? "db" : p.priceUnit;
