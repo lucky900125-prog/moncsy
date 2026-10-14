@@ -10,3 +10,11 @@ allowBuilds:
   esbuild: false
 # A version is resolved only after it has been public for a day (minutes), long enough for most hijacked releases to be pulled.
 minimumReleaseAge: 1440
+# Advisories `pnpm audit` (.github/workflows/audit.yml) accepts (architect's CI-06). Both are high, have no patched
+# release, and are reached only through the mobile toolchain (pnpm audit, 2026-10-14):
+# node-forge via expo > @expo/cli, braces via tailwindcss > chokidar. Remove an entry once a fix ships, and look again
+# if either one shows up on another path.
+auditConfig:
+  ignoreGhsas:
+    - GHSA-86w9-cpqp-85rv
+    - GHSA-vfj7-8cjw-p6xm

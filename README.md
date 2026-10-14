@@ -20,6 +20,8 @@ Ha az API nem érhető el, a web „Demó mód”-ban fut böngészőben tárolt
 
 A `pnpm-workspace.yaml` csak az ott felsorolt függőségek telepítő-szkriptjét engedi futni, és egy napnál frissebb csomagverziót nem old fel. Ha egy régebbi telepítés után a `pnpm install` `ERR_PNPM_IGNORED_BUILDS` hibával áll meg, töröld egyszer a `node_modules` mappákat (`rm -rf node_modules apps/*/node_modules packages/*/node_modules`), és telepíts újra.
 
+A `pnpm audit --audit-level high` hetente és minden függőséget módosító PR-on lefut (`.github/workflows/audit.yml`); a két elfogadott, csak a mobil eszközláncot érintő találat a `pnpm-workspace.yaml` `auditConfig` részében van, indoklással. A Dependabot hetente nyit frissítési PR-t (`.github/dependabot.yml`).
+
 ## Élő demó
 
 A `main` minden pusha után a GitHub Actions kiteszi a webappot GitHub Pages-re, de csak ha a CI ellenőrzései (tesztek, buildek) átmentek (`.github/workflows/ci.yml`): https://lucky900125-prog.github.io/moncsy/ .

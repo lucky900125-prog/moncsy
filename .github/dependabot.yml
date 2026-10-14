@@ -1,0 +1,23 @@
+# Weekly version-update pull requests (architect's CI-06). Dependabot waits 3 days after a release before proposing it,
+# longer than the day pnpm-workspace.yaml's minimumReleaseAge asks for. Security updates and alerts are switched on in
+# the repository settings, not here.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    # Minor and patch releases of every package in one pull request; each major its own.
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+    # Expo pins the React Native it supports, so their majors move together, by hand, with an Expo SDK upgrade.
+    ignore:
+      - dependency-name: "expo*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-native"
+        update-types: ["version-update:semver-major"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
