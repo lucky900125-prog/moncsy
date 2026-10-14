@@ -213,7 +213,7 @@ export function SettingsPage() {
               <p className="text-xs text-muted-foreground">Minden kéréshez csatolva megy (Authorization: Bearer). Csak ebben a böngészőben tárolódik.</p>
               {SHARED_ORIGIN && (
                 <p className="text-xs text-amber-700 dark:text-amber-300">
-                  A {location.host} címet a fiók összes GitHub Pages oldala megosztja, ezek is olvashatják a tokent. Olyan tokent adj meg, amit le tudsz cserélni. Saját domainnel ez a kockázat megszűnik.
+                  A {location.host} címet a fiók összes GitHub Pages oldala megosztja, ezek olvashatják és átírhatják az itt tárolt adatokat, a tokent is. Olyan tokent adj meg, amit le tudsz cserélni. Gyanú esetén a token cseréje nem elég: töröld a böngészőben ennek a webhelynek az összes adatát is. Saját domainnel ez a kockázat megszűnik.
                 </p>
               )}
             </div>
