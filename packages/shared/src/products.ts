@@ -64,10 +64,14 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 const LEGAL_FORMS = new Set(["kft", "zrt", "nyrt", "bt", "kkt", "rt", "ltd", "gmbh", "co", "inc", "sa", "ag"]);
 const STORE_NOISE = new Set([
   "magyarország", "magyarorszag", "hungary", "hungária", "global", "áruházak", "áruház", "aruhazak", "aruhaz",
-  "kereskedelmi", "élelmiszer", "elelmiszer", "és", "es", "szolgáltató", "szolgaltato",
+  "kereskedelmi", "élelmiszer", "elelmiszer", "és", "es", "szolgáltató", "szolgaltato", "holding",
 ]);
 
-/** "SPAR Magyarország Kft." and "Spar" are the same store; legal forms and country words are dropped. */
+/**
+ * "SPAR Magyarország Kft." and "Spar" are the same store; legal forms and country words are dropped.
+ * A registered company name is "<chain> <words about the company> <legal form>", so it ends at the first such word:
+ * "Penny Market Kft." is "Penny Market", like the "Penny Market" a bank shows, and not "Penny".
+ */
 export function storeName(merchant: string): string {
   const words = merchant
     .replace(/\([^()]*\)/g, " ")
@@ -76,13 +80,22 @@ export function storeName(merchant: string): string {
     .map((w) => w.replace(/\.+$/, ""))
     .filter(Boolean);
   const isLegal = (w: string) => LEGAL_FORMS.has(w.toLocaleLowerCase("hu"));
-  const hadLegalForm = words.some(isLegal);
-  const kept = words.filter((w) => !isLegal(w) && !STORE_NOISE.has(w.toLocaleLowerCase("hu")));
+  const isNoise = (w: string) => STORE_NOISE.has(w.toLocaleLowerCase("hu"));
+  const kept = words.filter((w) => !isLegal(w) && !isNoise(w));
   if (kept.length === 0) return merchant.trim() || "Ismeretlen bolt";
-  // A registered company name is "<chain> <words about the company>"; the chain is the first word.
-  const name = hadLegalForm ? kept[0]! : kept.join(" ");
-  return name.length > 3 && name === name.toLocaleUpperCase("hu") ? capitalize(name.toLocaleLowerCase("hu")) : name;
+  const end = words.findIndex((w) => isLegal(w) || isNoise(w));
+  const name = words.some(isLegal) && end > 0 ? words.slice(0, end) : kept;
+  // A word in capitals that is longer than an acronym is a name: "PENNY MARKET" is "Penny Market", "OTP" stays.
+  const shout = (w: string) => w.length > 3 && w === w.toLocaleUpperCase("hu") && w !== w.toLocaleLowerCase("hu");
+  return name.map((w) => (shout(w) ? capitalize(w.toLocaleLowerCase("hu")) : w)).join(" ");
 }
+
+/** What two spellings of one store have in common: "Spar", "SPAR" and "spar", or "Müller" and "MULLER". */
+const storeKey = (name: string) =>
+  name
+    .toLocaleLowerCase("hu")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
 
 const capitalize = (s: string) => s.charAt(0).toLocaleUpperCase("hu") + s.slice(1);
 const norm = (s: string) => s.trim().replace(/\s+/g, " ").toLocaleLowerCase("hu");
@@ -112,9 +125,13 @@ export function productKey(item: ReceiptItem, currency: string): string {
  */
 export function buildProductStats(transactions: Transaction[]): ProductStat[] {
   const groups = new Map<string, { item: ReceiptItem; purchases: ProductPurchase[]; packs: Set<string>; base: BaseUnit | null }>();
+  // A store spelled several ways is one store, shown the way it first appears.
+  const storeNames = new Map<string, string>();
   for (const tx of transactions) {
     if (!tx.items?.length) continue;
-    const store = storeName(tx.merchant);
+    const name = storeName(tx.merchant);
+    if (!storeNames.has(storeKey(name))) storeNames.set(storeKey(name), name);
+    const store = storeNames.get(storeKey(name))!;
     for (const item of tx.items) {
       if (!(item.unitPrice > 0) || !(item.total > 0)) continue;
       const key = productKey(item, tx.currency);
