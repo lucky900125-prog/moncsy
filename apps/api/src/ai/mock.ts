@@ -4,7 +4,7 @@ import type { AIProvider, ChatMessage, CompleteOptions } from "./types.js";
 /**
  * Deterministic offline provider. Used by default when no API key is configured, and in tests.
  * - vision(): the same plausible Hungarian supermarket receipt, or for the statement prompt three statement lines.
- * - complete(): if the prompt carries an <aggregate>…</aggregate> JSON block (see ai/prompts.ts),
+ * - complete(): if the prompt carries an <aggregate>…</aggregate> or <products>…</products> JSON block (see services/analyze.ts),
  *   derives a few insights from it; otherwise returns a fixed JSON object.
  */
 export class MockProvider implements AIProvider {
