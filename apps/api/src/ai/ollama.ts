@@ -1,5 +1,5 @@
 import { HttpError } from "../errors.js";
-import { postJson, unsupportedMedia } from "./http.js";
+import { cutOff, postJson, unsupportedMedia } from "./http.js";
 import type { AIProvider, ChatMessage, CompleteOptions, ProviderSettings } from "./types.js";
 
 interface OllamaChatResponse {
@@ -37,6 +37,7 @@ export class OllamaProvider implements AIProvider {
     if (opts.maxTokens) options.num_predict = opts.maxTokens;
     if (Object.keys(options).length) body.options = options;
     const res = (await postJson(this.name, `${this.base}/api/chat`, body, {}, this.s.timeoutMs ?? 180_000)) as OllamaChatResponse;
+    if (res.done_reason === "length") throw cutOff(this.name, opts.maxTokens);
     const text = res.message?.content ?? "";
     if (!text.trim()) throw new HttpError(502, `AI provider "ollama" returned no text`);
     return text;

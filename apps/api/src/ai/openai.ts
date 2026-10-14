@@ -1,5 +1,5 @@
 import { HttpError } from "../errors.js";
-import { postJson } from "./http.js";
+import { cutOff, postJson } from "./http.js";
 import type { AIProvider, ChatMessage, CompleteOptions, ProviderSettings } from "./types.js";
 
 interface ChatCompletionResponse {
@@ -54,7 +54,7 @@ export class OpenAIProvider implements AIProvider {
     const res = (await postJson(this.name, `${this.base}/chat/completions`, body, headers, this.s.timeoutMs ?? 90_000)) as ChatCompletionResponse;
     const choice = res.choices?.[0];
     if (choice?.message?.refusal) throw new HttpError(502, `AI provider "openai" refused: ${choice.message.refusal}`);
-    if (choice?.finish_reason === "length") throw new HttpError(502, `AI provider "openai" hit the token limit; the answer was truncated`);
+    if (choice?.finish_reason === "length") throw cutOff(this.name, opts.maxTokens);
     const text = choice?.message?.content ?? "";
     if (!text.trim()) throw new HttpError(502, `AI provider "openai" returned no text`);
     return text;

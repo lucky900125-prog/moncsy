@@ -1,5 +1,5 @@
 import { HttpError } from "../errors.js";
-import { postJson, unsupportedMedia } from "./http.js";
+import { cutOff, postJson, unsupportedMedia } from "./http.js";
 import type { AIProvider, ChatMessage, CompleteOptions, ProviderSettings } from "./types.js";
 
 const DEFAULT_BASE = "https://api.anthropic.com";
@@ -47,9 +47,16 @@ export class AnthropicProvider implements AIProvider {
       "x-api-key": this.s.apiKey!,
       "anthropic-version": "2023-06-01",
     };
+    const maxTokens = opts.maxTokens ?? 16000;
+    // Stated rather than left to the model's defaults (adaptive thinking at high effort on Sonnet 5.5): thinking counts
+    // against max_tokens, and reading a receipt or a statement gains little from long deliberation. temperature is not
+    // sent, because Sonnet 5.5 answers 400 to any non-default value (platform.claude.com/docs/en/build-with-claude/thinking,
+    // "Sampling parameters"). A model that takes neither field fails loudly with the API's 400 message.
     const body: Record<string, unknown> = {
       model: this.model,
-      max_tokens: opts.maxTokens ?? 16000,
+      max_tokens: maxTokens,
+      thinking: { type: "adaptive" },
+      output_config: { effort: "medium" },
       messages,
     };
     const jsonRule = opts.json ? "Respond with a single JSON object only: no prose, no Markdown code fences." : "";
@@ -65,9 +72,7 @@ export class AnthropicProvider implements AIProvider {
       const why = res.stop_details?.explanation ?? res.stop_details?.category ?? "no details";
       throw new HttpError(502, `AI provider "anthropic" declined the request (${why})`);
     }
-    if (res.stop_reason === "max_tokens") {
-      throw new HttpError(502, `AI provider "anthropic" hit max_tokens; the answer was truncated`);
-    }
+    if (res.stop_reason === "max_tokens" || res.stop_reason === "model_context_window_exceeded") throw cutOff(this.name, maxTokens);
     const text = (res.content ?? []).filter((b) => b.type === "text").map((b) => b.text ?? "").join("");
     if (!text.trim()) throw new HttpError(502, `AI provider "anthropic" returned no text`);
     return text;

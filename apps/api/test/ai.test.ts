@@ -181,6 +181,60 @@ describe("provider adapters (fetch stubbed, no network)", () => {
     await expect(p.complete([{ role: "user", content: "x" }])).rejects.toThrow(/HTTP 529/);
   });
 
+  it("anthropic: asks for adaptive thinking at medium effort, and a cut-off answer is a 422 that says why", async () => {
+    // Thinking blocks come back first, with an empty text under Sonnet 5.5's default display.
+    const fetchMock = vi.fn(async () =>
+      Response.json({ content: [{ type: "thinking", thinking: "", signature: "s" }, { type: "text", text: "{}" }], stop_reason: "end_turn" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const p = new AnthropicProvider({ apiKey: "sk-test" });
+    expect(await p.complete([{ role: "user", content: "hi" }], { json: true, maxTokens: 16000, temperature: 0 })).toBe("{}");
+    const body = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
+    expect(body).toMatchObject({ thinking: { type: "adaptive" }, output_config: { effort: "medium" }, max_tokens: 16000 });
+    // Sonnet 5.5 answers 400 to any non-default temperature.
+    expect(body.temperature).toBeUndefined();
+
+    for (const stop of ["max_tokens", "model_context_window_exceeded"]) {
+      fetchMock.mockResolvedValueOnce(Response.json({ content: [{ type: "text", text: '{"a":' }], stop_reason: stop }));
+      const err = await p.vision("QUJD", "application/pdf", "read", { maxTokens: 16000 }).catch((e: unknown) => e);
+      expect(err, stop).toMatchObject({ statusCode: 422 });
+      expect((err as Error).message).toBe(
+        'The AI answer was cut off at 16000 tokens (anthropic): the document or question needs a longer answer than one request gives. Split the document into smaller parts; for a bank statement, export it as CSV or XLSX instead.',
+      );
+    }
+  });
+
+  it("the other adapters report a cut-off answer the same way", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ choices: [{ message: { content: '{"a":' }, finish_reason: "length" }] })));
+    await expect(new OpenAIProvider({ apiKey: "k" }).complete([{ role: "user", content: "x" }], { maxTokens: 100 })).rejects.toMatchObject({
+      statusCode: 422,
+      message: expect.stringMatching(/^The AI answer was cut off at 100 tokens \(openai\)/),
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ message: { content: '{"a":' }, done: true, done_reason: "length" })));
+    await expect(new OllamaProvider({}).complete([{ role: "user", content: "x" }], { maxTokens: 100 })).rejects.toMatchObject({
+      statusCode: 422,
+      message: expect.stringMatching(/^The AI answer was cut off at 100 tokens \(ollama\)/),
+    });
+  });
+
+  it("leaves room for thinking: receipts and analyses may answer in 16000 tokens", async () => {
+    const asked: { kind: string; maxTokens?: number }[] = [];
+    const recording: AIProvider = {
+      name: "recording",
+      model: "r-1",
+      complete: async (_m, o) => (asked.push({ kind: "complete", maxTokens: o?.maxTokens }), '{"summary":"x","insights":[]}'),
+      vision: async (_i, _m, _p, o) => (asked.push({ kind: "vision", maxTokens: o?.maxTokens }), '{"merchant":"x","date":"2026-10-14","total":1,"currency":"HUF","items":[]}'),
+    };
+    const app = await testApp({ ai: recording });
+    await app.inject({ method: "POST", url: "/api/receipts/scan", ...multipart("blokk.jpg", "image/jpeg", FAKE_JPEG) });
+    await app.inject({ method: "POST", url: "/api/ai/analyze", payload: { from: "2026-10-01", to: "2026-10-31" } });
+    expect(asked).toEqual([
+      { kind: "vision", maxTokens: 16000 },
+      { kind: "complete", maxTokens: 16000 },
+    ]);
+    await app.close();
+  });
+
   it("openai-compatible: base URL, bearer auth, json mode and image_url parts", async () => {
     const fetchMock = vi.fn(async () => Response.json({ choices: [{ message: { content: "{}" }, finish_reason: "stop" }] }));
     vi.stubGlobal("fetch", fetchMock);
