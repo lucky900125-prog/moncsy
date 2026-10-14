@@ -1,13 +1,19 @@
 const isHeic = (f: File) => /image\/hei[cf]/.test(f.type) || /\.hei[cf]$/i.test(f.name);
 
+/** By content, not by type or name: a file can come with neither, and the server also goes by its first bytes. */
+async function isPdf(file: File) {
+  const head = new Uint8Array(await file.slice(0, 5).arrayBuffer());
+  return String.fromCharCode(...head) === "%PDF-";
+}
+
 /**
- * Re-encodes a photo as JPEG, at most 1600px, before upload. Every image goes through the canvas, small ones too, so
- * the EXIF data (GPS position, device) never leaves the browser. PDFs pass through unchanged.
+ * Re-encodes a photo as JPEG, at most 1600px, before upload. Everything but a PDF goes through the canvas, small
+ * images and files without a type too, so the EXIF data (GPS position, device) never leaves the browser.
  * HEIC is always re-encoded (Safari can decode it); the AI providers cannot read HEIC, so an undecodable HEIC is an error.
  */
 export async function shrinkImage(file: File, max = 1600): Promise<File> {
   const heic = isHeic(file);
-  if (!file.type.startsWith("image/") && !heic) return file;
+  if (await isPdf(file)) return file;
   let bmp: ImageBitmap;
   try {
     bmp = await createImageBitmap(file);
