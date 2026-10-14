@@ -8,8 +8,8 @@
   },
   "scripts": {
     "dev": "tsx watch --disable-warning=ExperimentalWarning src/index.ts",
-    "build": "tsc -p tsconfig.build.json",
-    "start": "node --disable-warning=ExperimentalWarning dist/index.js",
+    "build": "pnpm --filter @et/shared build && tsc -p tsconfig.build.json",
+    "start": "node --conditions=et-dist --disable-warning=ExperimentalWarning dist/index.js",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

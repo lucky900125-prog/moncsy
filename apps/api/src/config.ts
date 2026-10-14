@@ -6,7 +6,11 @@ export interface AppConfig {
   host: string;
   dbPath: string;
   corsOrigin: string;
+  /** when set, every /api route except /health needs "Authorization: Bearer <apiToken>" */
+  apiToken: string | undefined;
   defaultCurrency: string;
+  /** time zone of the wall-clock times written in bank statements */
+  statementTz: string;
   ai: {
     provider: AIProviderName;
     model: string | undefined;
@@ -48,6 +52,21 @@ function pickPort(env: NodeJS.ProcessEnv): number {
   return port;
 }
 
+const LOOPBACK = new Set(["127.0.0.1", "::1", "localhost"]);
+
+/**
+ * Without a token the API trusts every caller, which is only safe when nothing but this machine can reach it.
+ * Listening on another address therefore needs API_TOKEN, or ALLOW_NO_AUTH=1 as an explicit, logged choice.
+ */
+export function assertSafeExposure(cfg: AppConfig, env: NodeJS.ProcessEnv = process.env): string | null {
+  if (cfg.apiToken || LOOPBACK.has(cfg.host)) return null;
+  if (env.ALLOW_NO_AUTH === "1") return `Listening on ${cfg.host} without API_TOKEN (ALLOW_NO_AUTH=1): anyone who can reach this port can read and change all data.`;
+  throw new Error(
+    `HOST=${cfg.host} exposes the API beyond this machine, but API_TOKEN is not set. Set API_TOKEN to a long random value ` +
+      `(and enter it in the app's settings), or set ALLOW_NO_AUTH=1 to run without one on a network you trust.`,
+  );
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const provider = pickAIProvider(env);
   const apiKey =
@@ -58,7 +77,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     host: env.HOST || "127.0.0.1",
     dbPath: env.DB_PATH || "./data/expense.db",
     corsOrigin: env.CORS_ORIGIN || "http://localhost:5173,http://localhost:4173",
+    apiToken: env.API_TOKEN?.trim() || undefined,
     defaultCurrency: (env.DEFAULT_CURRENCY || "HUF").toUpperCase(),
+    statementTz: env.STATEMENT_TZ || "Europe/Budapest",
     ai: {
       provider,
       model: env.AI_MODEL || undefined,

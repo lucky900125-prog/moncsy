@@ -4,13 +4,13 @@ import { Repository } from "../src/repository.js";
 import { testApp } from "./helpers.js";
 
 let repo: Repository;
-beforeEach(() => {
-  repo = new Repository(openDb(":memory:"));
+beforeEach(async () => {
+  repo = new Repository(await openDb(":memory:"));
 });
 
 describe("seeding", () => {
-  it("seeds the 12 default Hungarian categories once", () => {
-    const cats = repo.listCategories();
+  it("seeds the 12 default Hungarian categories once", async () => {
+    const cats = await repo.listCategories();
     expect(cats.map((c) => c.name)).toEqual(DEFAULT_CATEGORIES.map((c) => c.name));
     expect(cats.every((c) => !c.isCustom && /^#[0-9a-f]{6}$/.test(c.color))).toBe(true);
     expect(cats.find((c) => c.id === "groceries")?.name).toBe("Élelmiszer");
@@ -18,32 +18,32 @@ describe("seeding", () => {
 });
 
 describe("categories", () => {
-  it("creates, updates and deletes a custom category; deleting nulls transactions", () => {
-    const c = repo.createCategory({ name: "Kisállat", icon: "paw-print", color: "#a3b18a", budget: 15000 });
+  it("creates, updates and deletes a custom category; deleting nulls transactions", async () => {
+    const c = await repo.createCategory({ name: "Kisállat", icon: "paw-print", color: "#a3b18a", budget: 15000 });
     expect(c).toMatchObject({ name: "Kisállat", isCustom: true, budget: 15000, parentId: null });
-    const sub = repo.createCategory({ name: "Állatorvos", icon: "stethoscope", color: "#b5a68f", parentId: c.id });
+    const sub = await repo.createCategory({ name: "Állatorvos", icon: "stethoscope", color: "#b5a68f", parentId: c.id });
     expect(sub.parentId).toBe(c.id);
 
-    const u = repo.updateCategory(c.id, { name: "Háziállat", budget: null });
+    const u = await repo.updateCategory(c.id, { name: "Háziállat", budget: null });
     expect(u).toMatchObject({ name: "Háziállat", budget: null, icon: "paw-print" });
 
-    const tx = repo.createTransaction({ amount: -5000, currency: "HUF", date: "2026-10-01", merchant: "Fressnapf", categoryId: c.id, source: "manual" });
-    repo.deleteCategory(c.id);
-    expect(repo.getCategory(c.id)).toBeNull();
-    expect(repo.getTransaction(tx.id)?.categoryId).toBeNull();
-    expect(repo.getCategory(sub.id)?.parentId).toBeNull();
+    const tx = await repo.createTransaction({ amount: -5000, currency: "HUF", date: "2026-10-01", merchant: "Fressnapf", categoryId: c.id, source: "manual" });
+    await repo.deleteCategory(c.id);
+    expect(await repo.getCategory(c.id)).toBeNull();
+    expect((await repo.getTransaction(tx.id))?.categoryId).toBeNull();
+    expect((await repo.getCategory(sub.id))?.parentId).toBeNull();
   });
 
-  it("refuses to delete a built-in category and rejects unknown parents", () => {
-    expect(() => repo.deleteCategory("groceries")).toThrow(/built in/);
-    expect(() => repo.createCategory({ name: "X", icon: "x", color: "#000000", parentId: "nope" })).toThrow(/unknown category/);
-    expect(() => repo.updateCategory("missing", { name: "Y" })).toThrow(/not found/);
+  it("refuses to delete a built-in category and rejects unknown parents", async () => {
+    await expect(repo.deleteCategory("groceries")).rejects.toThrow(/built in/);
+    await expect(repo.createCategory({ name: "X", icon: "x", color: "#000000", parentId: "nope" })).rejects.toThrow(/unknown category/);
+    await expect(repo.updateCategory("missing", { name: "Y" })).rejects.toThrow(/not found/);
   });
 });
 
 describe("transactions", () => {
-  it("creates, reads, updates and deletes", () => {
-    const t = repo.createTransaction({
+  it("creates, reads, updates and deletes", async () => {
+    const t = await repo.createTransaction({
       amount: -4785,
       currency: "huf",
       date: "2026-10-12T10:30:00+02:00",
@@ -56,38 +56,36 @@ describe("transactions", () => {
     expect(t).toMatchObject({ currency: "HUF", date: "2026-10-12T08:30:00.000Z", externalId: null, source: "receipt" });
     expect(t.items).toHaveLength(1);
 
-    const u = repo.updateTransaction(t.id, { amount: -5000, note: null, categoryId: null, items: null });
+    const u = await repo.updateTransaction(t.id, { amount: -5000, note: null, categoryId: null, items: null });
     expect(u.amount).toBe(-5000);
     expect(u.note).toBeUndefined();
     expect(u.items).toBeUndefined();
     expect(u.categoryId).toBeNull();
     expect(u.merchant).toBe("SPAR");
 
-    repo.deleteTransaction(t.id);
-    expect(repo.getTransaction(t.id)).toBeNull();
-    expect(() => repo.deleteTransaction(t.id)).toThrow(/not found/);
+    await repo.deleteTransaction(t.id);
+    expect(await repo.getTransaction(t.id)).toBeNull();
+    await expect(repo.deleteTransaction(t.id)).rejects.toThrow(/not found/);
   });
 
-  it("filters by date range (inclusive date-only end), category and accent-insensitive-case search", () => {
+  it("filters by date range (inclusive date-only end), category and accent-insensitive-case search", async () => {
     const mk = (date: string, merchant: string, categoryId: string | null) =>
       repo.createTransaction({ amount: -100, currency: "HUF", date, merchant, categoryId, source: "manual" });
-    mk("2026-09-30T23:00:00Z", "Szeptemberi", null);
-    mk("2026-10-01T00:00:00Z", "Élelmiszer Bolt", "groceries");
-    mk("2026-10-31T22:00:00Z", "BKK Bérlet", "transport");
-    mk("2026-11-01T00:00:00Z", "Novemberi", null);
+    await mk("2026-09-30T23:00:00Z", "Szeptemberi", null);
+    await mk("2026-10-01T00:00:00Z", "Élelmiszer Bolt", "groceries");
+    await mk("2026-10-31T22:00:00Z", "BKK Bérlet", "transport");
+    await mk("2026-11-01T00:00:00Z", "Novemberi", null);
 
-    expect(repo.listTransactions({ from: "2026-10-01", to: "2026-10-31" }).map((t) => t.merchant)).toEqual(["BKK Bérlet", "Élelmiszer Bolt"]);
-    expect(repo.listTransactions({ categoryId: "transport" })).toHaveLength(1);
-    expect(repo.listTransactions({ categoryId: "none" })).toHaveLength(2);
-    expect(repo.listTransactions({ q: "élelmiszer" })[0]?.merchant).toBe("Élelmiszer Bolt");
+    expect((await repo.listTransactions({ from: "2026-10-01", to: "2026-10-31" })).map((t) => t.merchant)).toEqual(["BKK Bérlet", "Élelmiszer Bolt"]);
+    expect(await repo.listTransactions({ categoryId: "transport" })).toHaveLength(1);
+    expect(await repo.listTransactions({ categoryId: "none" })).toHaveLength(2);
+    expect((await repo.listTransactions({ q: "élelmiszer" }))[0]?.merchant).toBe("Élelmiszer Bolt");
   });
 
-  it("rejects duplicate externalIds and unknown categories", () => {
-    repo.createTransaction({ amount: 1, currency: "EUR", date: "2026-01-01", merchant: "a", categoryId: null, source: "import", externalId: "x1" });
-    expect(() =>
-      repo.createTransaction({ amount: 1, currency: "EUR", date: "2026-01-01", merchant: "a", categoryId: null, source: "import", externalId: "x1" }),
-    ).toThrow(/already exists/);
-    expect(() => repo.createTransaction({ amount: 1, currency: "EUR", date: "2026-01-01", merchant: "a", categoryId: "zzz", source: "manual" })).toThrow(
+  it("rejects duplicate externalIds and unknown categories", async () => {
+    await repo.createTransaction({ amount: 1, currency: "EUR", date: "2026-01-01", merchant: "a", categoryId: null, source: "import", externalId: "x1" });
+    await expect(repo.createTransaction({ amount: 1, currency: "EUR", date: "2026-01-01", merchant: "a", categoryId: null, source: "import", externalId: "x1" })).rejects.toThrow(/already exists/);
+    await expect(repo.createTransaction({ amount: 1, currency: "EUR", date: "2026-01-01", merchant: "a", categoryId: "zzz", source: "manual" })).rejects.toThrow(
       /unknown category/,
     );
   });

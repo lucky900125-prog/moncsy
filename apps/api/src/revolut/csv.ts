@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { parse } from "csv-parse/sync";
 import ExcelJS from "exceljs";
 import type { RevolutStatus } from "@et/shared";
-import { getMeta, setMeta, transaction as dbTransaction } from "../db.js";
+import { getMeta, setMeta } from "../db.js";
 import { badRequest } from "../errors.js";
 import type { Repository } from "../repository.js";
 import { categorize } from "./categorize.js";
@@ -218,14 +218,14 @@ export async function importStatement(
   const { txs, ignored } = toTransactions(rows);
   let imported = 0;
   let skipped = ignored;
-  const known = new Set(repo.listCategories().map((c) => c.id));
-  dbTransaction(repo.db, () => {
+  const known = new Set((await repo.listCategories()).map((c) => c.id));
+  await repo.withTx(async (repo) => {
     for (const t of txs) {
-      if (repo.hasExternalId(t.externalId)) {
+      if (await repo.hasExternalId(t.externalId)) {
         skipped++;
         continue;
       }
-      repo.createTransaction({
+      await repo.createTransaction({
         amount: t.amount,
         currency: t.currency,
         date: t.date,
@@ -239,7 +239,7 @@ export async function importStatement(
     }
     // Remember the latest balance per product/currency so /revolut/status can show "accounts".
     const accounts = new Map<string, RevolutStatus["accounts"][number] & { at: string }>(
-      (JSON.parse(getMeta(repo.db, META_CSV_ACCOUNTS) ?? "[]") as (RevolutStatus["accounts"][number] & { at: string })[]).map((a) => [
+      (JSON.parse((await getMeta(repo.db, META_CSV_ACCOUNTS)) ?? "[]") as (RevolutStatus["accounts"][number] & { at: string })[]).map((a) => [
         a.id,
         a,
       ]),
@@ -251,8 +251,8 @@ export async function importStatement(
       const prev = accounts.get(id);
       if (!prev || prev.at <= at) accounts.set(id, { id, name: `${r.product || "Current"} (${r.currency})`, currency: r.currency, balance: r.balance, at });
     }
-    setMeta(repo.db, META_CSV_ACCOUNTS, JSON.stringify([...accounts.values()]));
-    setMeta(repo.db, META_LAST_SYNC, new Date().toISOString());
+    await setMeta(repo.db, META_CSV_ACCOUNTS, JSON.stringify([...accounts.values()]));
+    await setMeta(repo.db, META_LAST_SYNC, new Date().toISOString());
   });
   return { imported, skipped, errors };
 }
@@ -262,8 +262,8 @@ export class CsvRevolutProvider implements RevolutProvider {
   constructor(private readonly repo: Repository) {}
 
   async status(): Promise<RevolutStatus> {
-    const lastSyncAt = getMeta(this.repo.db, META_LAST_SYNC);
-    const accounts = (JSON.parse(getMeta(this.repo.db, META_CSV_ACCOUNTS) ?? "[]") as RevolutStatus["accounts"]).map(
+    const lastSyncAt = await getMeta(this.repo.db, META_LAST_SYNC);
+    const accounts = (JSON.parse((await getMeta(this.repo.db, META_CSV_ACCOUNTS)) ?? "[]") as RevolutStatus["accounts"]).map(
       ({ id, name, currency, balance }) => ({ id, name, currency, balance }),
     );
     return { connected: lastSyncAt !== null, mode: "csv", lastSyncAt, accounts };

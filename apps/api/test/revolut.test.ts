@@ -23,7 +23,7 @@ CARD_PAYMENT,Current,2026-10-10 13:00:00,2026-10-10 13:00:00,Broken row,abc,0.00
 `;
 
 describe("Revolut statement parsing", () => {
-  it("parses the app's CSV export, skipping exchanges and non-completed rows", () => {
+  it("parses the app's CSV export, skipping exchanges and non-completed rows", async () => {
     const { rows, errors } = parseStatementCsv(CSV);
     expect(rows).toHaveLength(10);
     expect(errors).toEqual(['Row 12: invalid Amount "abc"']);
@@ -41,7 +41,7 @@ describe("Revolut statement parsing", () => {
     expect(txs.map((t) => t.categoryId)).toEqual(["groceries", "restaurant", "income", null, "transport", "other", "subscriptions"]);
   });
 
-  it("keyword categorizer handles accents and case", () => {
+  it("keyword categorizer handles accents and case", async () => {
     expect(categorize("TESCO GLOBAL ÁRUHÁZAK", -1)).toBe("groceries");
     expect(categorize("Bolt Food", -1)).toBe("restaurant");
     expect(categorize("Bolt.eu ride", -1)).toBe("transport");
@@ -67,13 +67,13 @@ describe("POST /api/revolut/import-statement", () => {
     const first = await app.inject({ method: "POST", url: "/api/revolut/import-statement", ...multipart("statement.csv", "text/csv", CSV) });
     expect(first.statusCode).toBe(200);
     expect(first.json()).toMatchObject({ imported: 7, skipped: 3 });
-    const txs = app.deps.repo.listTransactions();
+    const txs = await app.deps.repo.listTransactions();
     expect(txs).toHaveLength(7);
     expect(txs.every((t) => t.source === "revolut" && t.externalId?.startsWith("revolut:"))).toBe(true);
 
     const again = await app.inject({ method: "POST", url: "/api/revolut/import-statement", ...multipart("statement.csv", "text/csv", CSV) });
     expect(again.json()).toMatchObject({ imported: 0, skipped: 10 });
-    expect(app.deps.repo.listTransactions()).toHaveLength(7);
+    expect(await app.deps.repo.listTransactions()).toHaveLength(7);
 
     const status = (await app.inject("/api/revolut/status")).json();
     expect(status).toMatchObject({ connected: true, mode: "csv" });
@@ -114,7 +114,7 @@ describe("POST /api/revolut/import-statement", () => {
 });
 
 describe("revolutDate", () => {
-  it("reads statement wall-clock times as Europe/Budapest, DST-aware", () => {
+  it("reads statement wall-clock times as Europe/Budapest, DST-aware", async () => {
     expect(revolutDate("2026-10-31 23:30:00")).toBe("2026-10-31T22:30:00.000Z");
     expect(revolutDate("2026-07-01 12:00:00")).toBe("2026-07-01T10:00:00.000Z");
     expect(revolutDate(new Date(Date.UTC(2026, 6, 1, 12, 0, 0)))).toBe("2026-07-01T10:00:00.000Z");
@@ -133,7 +133,7 @@ describe("Revolut providers", () => {
   });
 
   it("business-api mode maps accounts and transaction legs and dedupes on re-sync", async () => {
-    const repo = new Repository(openDb(":memory:"));
+    const repo = new Repository(await openDb(":memory:"));
     const fetchImpl = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
       const url = new URL(String(input));
       expect(url.origin).toBe("https://sandbox-b2b.revolut.com");
@@ -164,7 +164,7 @@ describe("Revolut providers", () => {
     expect(fetchImpl.mock.calls[0]![1]).toMatchObject({ headers: { authorization: "Bearer tok" } });
 
     expect(await p.sync()).toEqual({ imported: 1, skipped: 1 });
-    expect(repo.listTransactions()[0]).toMatchObject({ merchant: "Lidl", amount: -42.1, categoryId: "groceries", externalId: "revolut-biz:tx-1:l1" });
+    expect((await repo.listTransactions())[0]).toMatchObject({ merchant: "Lidl", amount: -42.1, categoryId: "groceries", externalId: "revolut-biz:tx-1:l1" });
     expect(await p.sync()).toEqual({ imported: 0, skipped: 2 });
     // The second sync must reach back to the still-pending tx-2, not just one day before the last sync.
     const txCalls = fetchImpl.mock.calls.map((c) => new URL(String(c[0]))).filter((u) => u.pathname.endsWith("/transactions"));
@@ -172,7 +172,7 @@ describe("Revolut providers", () => {
   });
 
   it("business-api mode without a token reports disconnected", async () => {
-    const p = new BusinessApiRevolutProvider(new Repository(openDb(":memory:")), undefined, "production");
+    const p = new BusinessApiRevolutProvider(new Repository(await openDb(":memory:")), undefined, "production");
     expect((await p.status()).connected).toBe(false);
     await expect(p.sync()).rejects.toThrow(/REVOLUT_BUSINESS_TOKEN/);
   });

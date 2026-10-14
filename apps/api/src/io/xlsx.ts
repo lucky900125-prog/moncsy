@@ -5,7 +5,8 @@ import type { ExportPayload, ImportPayload, RawRecord } from "./common.js";
 /*
  * Workbook layout (first row = header, column order irrelevant on import):
  *   Transactions: id | date (ISO 8601 text) | amount | currency | merchant | categoryId | category (name, informational)
- *                 | note | source | externalId | items (JSON array of {name,quantity,unitPrice,total})
+ *                 | note | source | externalId | items (JSON array of {name,quantity,unitPrice,total} and optionally
+ *                   product, brand, packSize, packUnit)
  *   Categories:   id | name | icon | color | isCustom | parentId | budget
  * On import a transaction may give a category name instead of a categoryId.
  */

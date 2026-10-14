@@ -76,13 +76,13 @@ describe("POST /api/ai/analyze", () => {
     const app = await testApp({ ai });
     const add = (amount: number, date: string, merchant: string, categoryId: string | null) =>
       app.deps.repo.createTransaction({ amount, currency: "HUF", date, merchant, categoryId, source: "manual" });
-    add(400000, "2026-09-01", "Munkabér", "income");
-    add(-60000, "2026-09-05", "Tesco", "groceries");
-    add(-150000, "2026-09-10", "Albérlet", "housing");
-    add(400000, "2026-10-01", "Munkabér", "income");
-    add(-90000, "2026-10-05", "Tesco", "groceries");
-    add(-150000, "2026-10-10", "Albérlet", "housing");
-    add(-12000, "2026-10-12", "Wolt", "restaurant");
+    await add(400000, "2026-09-01", "Munkabér", "income");
+    await add(-60000, "2026-09-05", "Tesco", "groceries");
+    await add(-150000, "2026-09-10", "Albérlet", "housing");
+    await add(400000, "2026-10-01", "Munkabér", "income");
+    await add(-90000, "2026-10-05", "Tesco", "groceries");
+    await add(-150000, "2026-10-10", "Albérlet", "housing");
+    await add(-12000, "2026-10-12", "Wolt", "restaurant");
     return app;
   }
 
@@ -126,7 +126,7 @@ describe("POST /api/ai/analyze", () => {
 });
 
 describe("provider adapters (fetch stubbed, no network)", () => {
-  it("selects mock by default when no key is set", () => {
+  it("selects mock by default when no key is set", async () => {
     const cfg = loadConfig({});
     expect(cfg.ai.provider).toBe("mock");
     expect(createAIProvider(cfg.ai).name).toBe("mock");

@@ -1,6 +1,5 @@
 import { z } from "zod";
 import type { Category, Transaction } from "@et/shared";
-import { transaction as dbTransaction } from "../db.js";
 import type { Repository } from "../repository.js";
 import { categoryCreateSchema, transactionCreateSchema } from "../schemas.js";
 
@@ -66,6 +65,10 @@ const importTransactionSchema = transactionCreateSchema.extend({
           quantity: z.preprocess(numeric, z.number().finite()),
           unitPrice: z.preprocess(numeric, z.number().finite()),
           total: z.preprocess(numeric, z.number().finite()),
+          product: z.preprocess(emptyToNull, z.string().nullable()).optional(),
+          brand: z.preprocess(emptyToNull, z.string().nullable()).optional(),
+          packSize: z.preprocess((v) => (v === "" || v == null ? null : numeric(v)), z.number().finite().positive().nullable()).optional(),
+          packUnit: z.preprocess(emptyToNull, z.enum(["g", "kg", "ml", "l", "db"]).nullable()).optional(),
         }),
       )
       .optional(),
@@ -79,9 +82,9 @@ const fmtIssues = (e: z.ZodError) => e.issues.map((i) => `${i.path.join(".") || 
  * Existing ids / externalIds are skipped (never overwritten), so re-importing an export is a no-op.
  * imported / skipped count category and transaction rows together.
  */
-export function applyImport(repo: Repository, payload: ImportPayload): ImportResult {
+export async function applyImport(repo: Repository, payload: ImportPayload): Promise<ImportResult> {
   const res: ImportResult = { imported: 0, skipped: 0, errors: [] };
-  dbTransaction(repo.db, () => {
+  await repo.withTx(async (repo) => {
     const parents: [string, string, string][] = [];
     for (const rec of payload.categories) {
       const p = importCategorySchema.safeParse(rec.data);
@@ -90,11 +93,11 @@ export function applyImport(repo: Repository, payload: ImportPayload): ImportRes
         continue;
       }
       const c = p.data;
-      if (c.id && repo.getCategory(c.id)) {
+      if (c.id && (await repo.getCategory(c.id))) {
         res.skipped++;
         continue;
       }
-      const created = repo.createCategory(
+      const created = await repo.createCategory(
         { name: c.name, icon: c.icon, color: c.color, budget: c.budget, parentId: null },
         { id: c.id, isCustom: c.isCustom },
       );
@@ -102,11 +105,11 @@ export function applyImport(repo: Repository, payload: ImportPayload): ImportRes
       res.imported++;
     }
     for (const [id, parentId, where] of parents) {
-      if (!repo.getCategory(parentId)) res.errors.push(`${where}: parentId "${parentId}" not found; imported without parent`);
-      else repo.updateCategory(id, { parentId });
+      if (!(await repo.getCategory(parentId))) res.errors.push(`${where}: parentId "${parentId}" not found; imported without parent`);
+      else await repo.updateCategory(id, { parentId });
     }
 
-    const byName = new Map(repo.listCategories().map((c) => [c.name.toLocaleLowerCase("hu"), c.id] as const));
+    const byName = new Map((await repo.listCategories()).map((c) => [c.name.toLocaleLowerCase("hu"), c.id] as const));
     for (const rec of payload.transactions) {
       const p = importTransactionSchema.safeParse(rec.data);
       if (!p.success) {
@@ -114,11 +117,11 @@ export function applyImport(repo: Repository, payload: ImportPayload): ImportRes
         continue;
       }
       const { id, category, ...t } = p.data;
-      if ((id && repo.getTransaction(id)) || (t.externalId && repo.hasExternalId(t.externalId))) {
+      if ((id && (await repo.getTransaction(id))) || (t.externalId && (await repo.hasExternalId(t.externalId)))) {
         res.skipped++;
         continue;
       }
-      if (t.categoryId && !repo.getCategory(t.categoryId)) {
+      if (t.categoryId && !(await repo.getCategory(t.categoryId))) {
         res.errors.push(`${rec.where}: unknown categoryId "${t.categoryId}"`);
         continue;
       }
@@ -131,7 +134,7 @@ export function applyImport(repo: Repository, payload: ImportPayload): ImportRes
         t.categoryId = found;
       }
       try {
-        repo.createTransaction(t, { id });
+        await repo.createTransaction(t, { id });
         res.imported++;
       } catch (e) {
         res.errors.push(`${rec.where}: ${(e as Error).message}`);

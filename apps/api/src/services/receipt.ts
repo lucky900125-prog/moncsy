@@ -27,6 +27,10 @@ const modelReceiptSchema = z.object({
         quantity: num.default(1),
         unitPrice: num,
         total: num,
+        product: z.string().trim().min(1).nullable().default(null).transform((s) => s?.toLocaleLowerCase("hu") ?? null),
+        brand: z.string().trim().min(1).nullable().default(null),
+        packSize: num.positive().nullable().default(null),
+        packUnit: z.enum(["g", "kg", "ml", "l", "db"]).nullable().default(null),
       }),
     )
     .default([]),
@@ -46,6 +50,14 @@ Hungarian receipts are common:
 - Dates are usually written "2026.10.14." or "2026.10.14 13:45"; output them as YYYY-MM-DD.
 - Lines like "2 db x 389" mean quantity 2, unit price 389.
 - Ignore payment/change lines ("KÉSZPÉNZ", "VISSZAJÁRÓ", "BANKKÁRTYA") when listing items.
+- A discount line ("KEDVEZMÉNY", "AKCIÓ -120") belongs to the item above it: lower that item's total and unitPrice instead of listing it.
+
+For every item also give, so the same product can be compared across stores:
+- "product": the generic product in Hungarian, lower case, singular, without brand or size ("tej", "kenyér", "trappista sajt", "banán").
+- "brand": the brand when the line or your knowledge of the store's own labels shows it ("Mizo", "Pilos", "Spar"), else null.
+- "packSize" + "packUnit": the package size printed in the name ("1l" -> 1 + "l", "500g" -> 500 + "g", "6x1,5l" -> 9 + "l",
+  "10 db" -> 10 + "db"). For goods sold by weight ("0,746 kg x 599 Ft/kg") use quantity = the weight, unitPrice = the price
+  per kg, packSize 1, packUnit "kg". null when the size is not shown.
 
 Choose suggestedCategoryId from exactly one of these category ids (or null if none fits):
 ${cats}
@@ -56,7 +68,8 @@ Return only this JSON object, with numbers as JSON numbers (no currency symbols,
   "date": "YYYY-MM-DD" | null,
   "total": number | null,             // grand total actually paid, positive
   "currency": "HUF" | "EUR" | ... | null,  // ISO 4217
-  "items": [{ "name": string, "quantity": number, "unitPrice": number, "total": number }],
+  "items": [{ "name": string, "quantity": number, "unitPrice": number, "total": number,
+               "product": string | null, "brand": string | null, "packSize": number | null, "packUnit": "g" | "kg" | "ml" | "l" | "db" | null }],
   "suggestedCategoryId": string | null,
   "confidence": number,               // 0..1, how sure you are about merchant/date/total
   "rawText": string                   // the receipt text as you read it

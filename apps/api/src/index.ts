@@ -4,10 +4,13 @@ import { existsSync } from "node:fs";
 if (existsSync(".env")) process.loadEnvFile(".env");
 
 const { buildApp } = await import("./app.js");
+const { assertSafeExposure } = await import("./config.js");
 
 const app = await buildApp({ logger: true });
 const { port, host } = app.deps.config;
 try {
+  const warning = assertSafeExposure(app.deps.config);
+  if (warning) app.log.warn(warning);
   await app.listen({ port, host });
   app.log.info(`AI provider: ${app.deps.ai.name} (${app.deps.ai.model}); Revolut mode: ${app.deps.revolut.mode}`);
 } catch (err) {
