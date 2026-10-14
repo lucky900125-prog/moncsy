@@ -40,7 +40,7 @@ export const transactionCreateSchema = z.object({
   currency,
   date: isoDate,
   merchant: z.string().trim().max(200),
-  note: z.string().max(2000).optional(),
+  note: z.string().max(2000).nullable().optional(),
   categoryId: z.string().min(1).nullable().default(null),
   source: transactionSourceSchema.default("manual"),
   items: z.array(receiptItemSchema).optional(),
