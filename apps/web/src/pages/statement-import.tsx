@@ -113,7 +113,6 @@ export function StatementImportPage() {
     if (!preview || !file) return;
     // "" tells the server this role has no column, so auto-detection does not fill it back in.
     const next: StatementMapping = { ...preview.mapping, [role]: col === NONE ? "" : col };
-    storeMapping(preview.columns, next);
     void read(file, next, { remembered: true });
   }
 
@@ -140,10 +139,12 @@ export function StatementImportPage() {
   }, [selected]);
 
   async function doImport() {
-    if (!backend || selected.length === 0) return;
+    if (!backend || !preview || selected.length === 0) return;
     setPhase("importing");
     try {
       const r = await backend.importStatement(selected);
+      // Remembered only once a statement was imported with it, so a wrong try is not applied to the next file.
+      if (preview.columns.length) storeMapping(preview.columns, preview.mapping);
       setResult(r);
       setPhase("done");
       toast.success(`${r.imported} tétel importálva`, { description: r.skipped ? `${r.skipped} már megvolt, kihagyva` : undefined });
