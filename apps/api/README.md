@@ -155,6 +155,7 @@ The model answers in Hungarian unless the question is in another language.
 - **CAMT.052/053/054** (ISO 20022 XML), **OFX** and **MT940** are read by their structure.
 - **PDF** goes to the AI provider's vision call, so it needs a real provider.
 - **Old `.xls`** and XML that is not a bank statement are refused with 415 and a message saying what to do.
+- **Header row.** A summary line above the table can name a date and an amount too, so the header is the last such row before the first transaction. With no header recognised, the columns offered for a `mapping` are those of the row above the first transaction.
 - **Deduplication.** `externalId` is the bank's reference when there is one, otherwise `stmt:` + a hash of date, amount, currency, counterparty and description, with a `:n` suffix for identical rows in one file.
 
 ## Revolut (`src/revolut/`)
