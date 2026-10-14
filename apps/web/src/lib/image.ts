@@ -1,14 +1,23 @@
-/** Downscales a photo to max 1600px JPEG before upload. Returns the original file when the browser can't decode it (e.g. HEIC, PDF). */
+const isHeic = (f: File) => /image\/hei[cf]/.test(f.type) || /\.hei[cf]$/i.test(f.name);
+
+/**
+ * Downscales a photo to max 1600px JPEG before upload. PDFs pass through unchanged.
+ * HEIC is always re-encoded (Safari can decode it); the AI providers cannot read HEIC, so an undecodable HEIC is an error.
+ */
 export async function shrinkImage(file: File, max = 1600): Promise<File> {
-  if (!file.type.startsWith("image/") || file.type === "image/heic") return file;
+  const heic = isHeic(file);
+  if (!file.type.startsWith("image/") && !heic) return file;
   let bmp: ImageBitmap;
   try {
     bmp = await createImageBitmap(file);
   } catch {
+    if (heic) {
+      throw new Error("Ez a böngésző nem tudja megnyitni a HEIC képet. Küldd JPG-ként, vagy állítsd az iPhone kamerát „Legkompatibilisebb” formátumra.");
+    }
     return file;
   }
   const scale = Math.min(1, max / Math.max(bmp.width, bmp.height));
-  if (scale === 1 && file.size < 1.5e6) return file;
+  if (scale === 1 && file.size < 1.5e6 && !heic) return file;
   const canvas = document.createElement("canvas");
   canvas.width = Math.round(bmp.width * scale);
   canvas.height = Math.round(bmp.height * scale);

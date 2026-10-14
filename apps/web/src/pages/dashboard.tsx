@@ -12,7 +12,7 @@ import { CategoryBadgeIcon } from "@/components/category-dot";
 import { useApp, useCategoryMap } from "@/store/app";
 import { useUi } from "@/store/ui";
 import { money } from "@/lib/format";
-import { byCategory, cumulative, inMonth, pctChange, totals } from "@/lib/stats";
+import { BASE_CURRENCY, byCategory, cumulative, inMonth, pctChange, splitByCurrency, totals } from "@/lib/stats";
 import { prevMonth } from "@/lib/period";
 import { cn } from "@/lib/utils";
 
@@ -44,8 +44,9 @@ export function DashboardPage() {
   const openTx = useUi((s) => s.openTx);
 
   const data = useMemo(() => {
-    const cur = inMonth(transactions, month);
-    const prev = inMonth(transactions, prevMonth(month));
+    // Only the base currency is summed; foreign-currency rows are counted and flagged instead of mixed in.
+    const { base: cur, other: foreign } = splitByCurrency(inMonth(transactions, month));
+    const prev = splitByCurrency(inMonth(transactions, prevMonth(month))).base;
     const isCurrent = isSameMonth(month, new Date());
     const t = totals(cur);
     // For the running month compare against the same days of the previous month, not its full total.
@@ -54,7 +55,7 @@ export function DashboardPage() {
     const curCum = cumulative(cur, month, isCurrent);
     const prevCum = cumulative(prev, prevMonth(month), false);
     const series = curCum.map((v, i) => ({ day: i + 1, current: v, previous: prevCum[i] ?? prevCum[prevCum.length - 1] }));
-    return { cur, t, p, series, cats: byCategory(cur, cats) };
+    return { cur, foreign, t, p, series, cats: byCategory(cur, cats) };
   }, [transactions, month, cats]);
 
   if (status === "error") {
@@ -75,6 +76,12 @@ export function DashboardPage() {
         </div>
         <MonthSwitcher value={month} onChange={setMonth} />
       </div>
+
+      {data.foreign.length > 0 && (
+        <p className="-mt-2 text-xs text-muted-foreground">
+          {data.foreign.length} tétel más pénznemben ({[...new Set(data.foreign.map((t) => t.currency))].join(", ")}) van ebben a hónapban, ezek nincsenek benne a {BASE_CURRENCY} összesítésekben.
+        </p>
+      )}
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         <Stat label="Kiadás" value={data.t.expense} delta={pctChange(data.t.expense, data.p.expense)} invert size="lg" className="col-span-2 sm:col-span-1" />
@@ -161,10 +168,10 @@ export function DashboardPage() {
             </Button>
           </CardHeader>
           <CardContent className="px-3">
-            {data.cur.slice(0, 6).map((t) => (
+            {inMonth(transactions, month).slice(0, 6).map((t) => (
               <TransactionRow key={t.id} tx={t} category={t.categoryId ? cats.get(t.categoryId) : undefined} onClick={() => openTx(t)} />
             ))}
-            {data.cur.length === 0 && <p className="py-6 text-center text-sm text-muted-foreground">Nincs tétel ebben a hónapban.</p>}
+            {data.cur.length + data.foreign.length === 0 && <p className="py-6 text-center text-sm text-muted-foreground">Nincs tétel ebben a hónapban.</p>}
           </CardContent>
         </Card>
 

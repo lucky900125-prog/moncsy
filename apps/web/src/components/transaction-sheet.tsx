@@ -45,7 +45,9 @@ export function TransactionSheet() {
   const editing = Boolean(draft?.id);
   const visibleCats = categories.filter((c) => (kind === "income" ? c.id === "income" || c.isCustom : c.id !== "income"));
   const parsed = Number(amount.replace(/\s/g, "").replace(",", "."));
-  const valid = Number.isFinite(parsed) && parsed > 0;
+  const when = new Date(date);
+  const dateValid = date !== "" && !Number.isNaN(when.getTime());
+  const valid = Number.isFinite(parsed) && parsed > 0 && dateValid;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -56,8 +58,8 @@ export function TransactionSheet() {
       currency: draft?.currency ?? "HUF",
       merchant: merchant.trim(),
       categoryId,
-      date: new Date(date).toISOString(),
-      note: note.trim() || undefined,
+      date: when.toISOString(),
+      note: note.trim() || null,
       source: draft?.source ?? "manual",
       items,
     };
@@ -142,7 +144,8 @@ export function TransactionSheet() {
 
           <div className="grid gap-1.5">
             <Label htmlFor="date">Időpont</Label>
-            <Input id="date" type="datetime-local" value={date} onChange={(e) => setDate(e.target.value)} />
+            <Input id="date" type="datetime-local" value={date} onChange={(e) => setDate(e.target.value)} aria-invalid={!dateValid} />
+            {!dateValid && <p className="text-xs text-destructive">Adj meg egy érvényes időpontot.</p>}
           </div>
 
           {items && items.length > 0 && (

@@ -6,6 +6,7 @@ import { getMeta, setMeta, transaction as dbTransaction } from "../db.js";
 import { badRequest } from "../errors.js";
 import type { Repository } from "../repository.js";
 import { categorize } from "./categorize.js";
+import { cellValue } from "../io/xlsx.js";
 import { META_CSV_ACCOUNTS, META_LAST_SYNC, type RevolutProvider } from "./types.js";
 
 /** One row of the Revolut app's "Account statement" export (Excel or CSV). */
@@ -46,13 +47,39 @@ const HEADER_ALIASES: Record<keyof StatementRow, string[]> = {
   balance: ["balance"],
 };
 
-/** Revolut writes local wall-clock time without an offset ("2026-10-01 08:15:42"); it is stored as UTC. */
-function revolutDate(v: unknown): string {
-  if (v instanceof Date) return v.toISOString();
+/** Offset (ms) of `timeZone` from UTC at the given instant. */
+function tzOffset(utcMs: number, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit",
+  }).formatToParts(new Date(utcMs));
+  const get = (t: string) => Number(parts.find((p) => p.type === t)!.value);
+  return Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second")) - utcMs;
+}
+
+/** Converts a wall-clock time in `timeZone` to a UTC instant (DST-aware). */
+export function zonedToUtc(y: number, mo: number, d: number, h: number, mi: number, s: number, timeZone: string): Date {
+  const guess = Date.UTC(y, mo - 1, d, h, mi, s);
+  let t = guess - tzOffset(guess, timeZone);
+  t = guess - tzOffset(t, timeZone);
+  return new Date(t);
+}
+
+/**
+ * Revolut writes local wall-clock time without an offset ("2026-10-01 08:15:42").
+ * It is interpreted in STATEMENT_TZ (default Europe/Budapest) and stored as UTC.
+ * Excel Date cells carry the same wall-clock time encoded as UTC, so they are re-interpreted too.
+ */
+export function revolutDate(v: unknown, timeZone = process.env.STATEMENT_TZ || "Europe/Budapest"): string {
+  if (v instanceof Date) {
+    return zonedToUtc(v.getUTCFullYear(), v.getUTCMonth() + 1, v.getUTCDate(), v.getUTCHours(), v.getUTCMinutes(), v.getUTCSeconds(), timeZone).toISOString();
+  }
   const s = String(v ?? "").trim();
-  const m = s.match(/^(\d{4}-\d{2}-\d{2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
-  const iso = m ? `${m[1]}T${(m[2] ?? "0").padStart(2, "0")}:${m[3] ?? "00"}:${m[4] ?? "00"}Z` : s;
-  const t = Date.parse(iso);
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+  if (m) {
+    const [, y, mo, d, h = "0", mi = "0", sec = "0"] = m;
+    return zonedToUtc(+y!, +mo!, +d!, +h, +mi, +sec, timeZone).toISOString();
+  }
+  const t = Date.parse(s);
   if (Number.isNaN(t)) throw new Error(`invalid date "${s}"`);
   return new Date(t).toISOString();
 }
@@ -117,11 +144,15 @@ export function parseStatementCsv(text: string): { rows: StatementRow[]; errors:
 
 export async function parseStatementXlsx(buf: Buffer): Promise<{ rows: StatementRow[]; errors: string[] }> {
   const wb = new ExcelJS.Workbook();
-  await wb.xlsx.load(buf as unknown as ArrayBuffer);
+  try {
+    await wb.xlsx.load(buf as unknown as ArrayBuffer);
+  } catch (e) {
+    throw badRequest(`Not a readable XLSX file: ${(e as Error).message}`);
+  }
   const ws = wb.worksheets[0];
   if (!ws) throw badRequest("The XLSX file has no worksheets");
   const header: string[] = [];
-  ws.getRow(1).eachCell({ includeEmpty: true }, (cell, c) => (header[c] = String(cell.text ?? "").trim()));
+  ws.getRow(1).eachCell({ includeEmpty: true }, (cell, c) => (header[c] = String(cellValue(cell.value)).trim()));
   const records: Record<string, unknown>[] = [];
   ws.eachRow((row, n) => {
     if (n === 1) return;
@@ -129,7 +160,8 @@ export async function parseStatementXlsx(buf: Buffer): Promise<{ rows: Statement
     header.forEach((h, c) => {
       if (!h) return;
       const v = row.getCell(c).value;
-      rec[h] = v && typeof v === "object" && !(v instanceof Date) && "result" in v ? (v as { result: unknown }).result : v;
+      // Keep real Date objects (revolutDate handles them); unwrap formula, rich-text and hyperlink cells.
+      rec[h] = v instanceof Date ? v : cellValue(v);
     });
     if (Object.values(rec).some((v) => v !== null && v !== undefined && v !== "")) records.push(rec);
   });

@@ -4,7 +4,7 @@ import { openDb } from "../src/db.js";
 import { Repository } from "../src/repository.js";
 import { BusinessApiRevolutProvider } from "../src/revolut/business-api.js";
 import { categorize } from "../src/revolut/categorize.js";
-import { parseStatementCsv, statementExternalId, toTransactions } from "../src/revolut/csv.js";
+import { parseStatementCsv, revolutDate, statementExternalId, toTransactions } from "../src/revolut/csv.js";
 import { OpenBankingRevolutProvider } from "../src/revolut/open-banking.js";
 import { multipart, testApp } from "./helpers.js";
 
@@ -27,14 +27,14 @@ describe("Revolut statement parsing", () => {
     const { rows, errors } = parseStatementCsv(CSV);
     expect(rows).toHaveLength(10);
     expect(errors).toEqual(['Row 12: invalid Amount "abc"']);
-    expect(rows[0]).toMatchObject({ type: "CARD_PAYMENT", startedDate: "2026-10-01T08:15:42.000Z", completedDate: "2026-10-02T09:01:10.000Z", amount: -4785, currency: "HUF" });
+    expect(rows[0]).toMatchObject({ type: "CARD_PAYMENT", startedDate: "2026-10-01T06:15:42.000Z", completedDate: "2026-10-02T07:01:10.000Z", amount: -4785, currency: "HUF" });
 
     const { txs, ignored } = toTransactions(rows);
     expect(ignored).toBe(3); // 2 exchange legs + 1 pending
     expect(txs).toHaveLength(7);
     const spar = txs[0]!;
-    expect(spar).toMatchObject({ date: "2026-10-02T09:01:10.000Z", amount: -4785, merchant: "Spar", categoryId: "groceries" });
-    expect(spar.externalId).toBe(statementExternalId("2026-10-02T09:01:10.000Z", -4785, "Spar"));
+    expect(spar).toMatchObject({ date: "2026-10-02T07:01:10.000Z", amount: -4785, merchant: "Spar", categoryId: "groceries" });
+    expect(spar.externalId).toBe(statementExternalId("2026-10-02T07:01:10.000Z", -4785, "Spar"));
     const atm = txs.find((t) => t.merchant.startsWith("Cash"))!;
     expect(atm.amount).toBe(-20500); // fee deducted
     expect(atm.note).toContain("díj: 500 HUF");
@@ -103,6 +103,15 @@ describe("POST /api/revolut/import-statement", () => {
   });
 });
 
+describe("revolutDate", () => {
+  it("reads statement wall-clock times as Europe/Budapest, DST-aware", () => {
+    expect(revolutDate("2026-10-31 23:30:00")).toBe("2026-10-31T22:30:00.000Z");
+    expect(revolutDate("2026-07-01 12:00:00")).toBe("2026-07-01T10:00:00.000Z");
+    expect(revolutDate(new Date(Date.UTC(2026, 6, 1, 12, 0, 0)))).toBe("2026-07-01T10:00:00.000Z");
+    expect(revolutDate("2026-07-01 12:00:00", "UTC")).toBe("2026-07-01T12:00:00.000Z");
+  });
+});
+
 describe("Revolut providers", () => {
   it("open-banking mode returns 501 with the AISP explanation", async () => {
     const app = await testApp({ revolut: new OpenBankingRevolutProvider() });
@@ -147,6 +156,9 @@ describe("Revolut providers", () => {
     expect(await p.sync()).toEqual({ imported: 1, skipped: 1 });
     expect(repo.listTransactions()[0]).toMatchObject({ merchant: "Lidl", amount: -42.1, categoryId: "groceries", externalId: "revolut-biz:tx-1:l1" });
     expect(await p.sync()).toEqual({ imported: 0, skipped: 2 });
+    // The second sync must reach back to the still-pending tx-2, not just one day before the last sync.
+    const txCalls = fetchImpl.mock.calls.map((c) => new URL(String(c[0]))).filter((u) => u.pathname.endsWith("/transactions"));
+    expect(txCalls[1]!.searchParams.get("from")).toBe("2026-10-12T10:00:00.000Z");
   });
 
   it("business-api mode without a token reports disconnected", async () => {

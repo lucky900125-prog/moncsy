@@ -55,8 +55,11 @@ export function SettingsPage() {
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
       a.download = `kassza-export-${new Date().toISOString().slice(0, 10)}.${format}`;
+      document.body.appendChild(a);
       a.click();
-      URL.revokeObjectURL(a.href);
+      a.remove();
+      // Revoke later: Firefox and Safari read the blob URL after click() returns.
+      setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
     });
 
   const importFile = (file?: File) =>

@@ -5,6 +5,8 @@ import type { Repository } from "../repository.js";
 import { categorize } from "./categorize.js";
 import { META_LAST_SYNC, type RevolutProvider } from "./types.js";
 
+const META_PENDING_SINCE = "revolut.business.pendingSince";
+
 /*
  * Revolut Business API, verified against developer.revolut.com (2026-10):
  *  - Base URL production https://b2b.revolut.com/api/1.0, sandbox https://sandbox-b2b.revolut.com/api/1.0
@@ -103,10 +105,14 @@ export class BusinessApiRevolutProvider implements RevolutProvider {
 
   async sync(): Promise<{ imported: number; skipped: number }> {
     const last = getMeta(this.repo.db, META_LAST_SYNC);
-    // Overlap by a day so late-completing transactions are picked up; dedupe handles the overlap.
-    const from = last
-      ? new Date(Date.parse(last) - 86_400_000).toISOString()
-      : new Date(Date.now() - 90 * 86_400_000).toISOString();
+    // The window starts at the earliest still-pending transaction from earlier syncs (so it is fetched again once
+    // it completes) or a day before the last sync; dedupe on externalId handles the overlap.
+    const pendingSince = getMeta(this.repo.db, META_PENDING_SINCE);
+    const candidates = [
+      last ? Date.parse(last) - 86_400_000 : Date.now() - 90 * 86_400_000,
+      pendingSince ? Date.parse(pendingSince) : Infinity,
+    ];
+    const from = new Date(Math.min(...candidates)).toISOString();
     const all: BizTransaction[] = [];
     let to: string | undefined;
     for (let page = 0; page < 100; page++) {
@@ -122,8 +128,12 @@ export class BusinessApiRevolutProvider implements RevolutProvider {
     const known = new Set(this.repo.listCategories().map((c) => c.id));
     let imported = 0;
     let skipped = 0;
+    let earliestPending: string | null = null;
     dbTransaction(this.repo.db, () => {
       for (const tx of all) {
+        if (tx.state === "pending" && tx.type !== "exchange" && (!earliestPending || tx.created_at < earliestPending)) {
+          earliestPending = tx.created_at;
+        }
         if (tx.state !== "completed" || tx.type === "exchange") {
           skipped++;
           continue;
@@ -153,6 +163,7 @@ export class BusinessApiRevolutProvider implements RevolutProvider {
         }
       }
       setMeta(this.repo.db, META_LAST_SYNC, new Date().toISOString());
+      setMeta(this.repo.db, META_PENDING_SINCE, earliestPending ?? "");
     });
     return { imported, skipped };
   }

@@ -39,7 +39,8 @@ The database is created at `DB_PATH` on first run. The default categories are se
 | `PORT` | `8787` | HTTP port |
 | `HOST` | `0.0.0.0` | Bind address |
 | `DB_PATH` | `./data/expense.db` | SQLite file (`:memory:` for an ephemeral DB) |
-| `CORS_ORIGIN` | `*` | Allowed origins, comma-separated |
+| `CORS_ORIGIN` | `http://localhost:5173,http://localhost:4173` | Allowed origins, comma-separated. The API has no auth yet, so `*` lets any website you visit read and change your data |
+| `STATEMENT_TZ` | `Europe/Budapest` | Time zone of the wall-clock times in Revolut statements |
 | `DEFAULT_CURRENCY` | `HUF` | Summary/analysis currency when a range has no transactions |
 | `AI_PROVIDER` | auto | `anthropic` \| `openai` \| `ollama` \| `mock`. If unset: `anthropic` when `ANTHROPIC_API_KEY` is set, else `openai` when `OPENAI_API_KEY` is set, else `mock` |
 | `AI_MODEL` | per provider | `claude-sonnet-5-5` / `gpt-4.1-mini` / `llama3.2-vision` |

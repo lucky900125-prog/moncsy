@@ -1,8 +1,32 @@
 import type { Category, Transaction } from "@et/shared";
 import { getDate, getDaysInMonth, isSameMonth } from "date-fns";
 
+/** Currency the dashboard, budgets and charts are computed in. Other currencies are never added to it. */
+export const BASE_CURRENCY = "HUF";
+
 export function inMonth(tx: Transaction[], d: Date) {
   return tx.filter((t) => isSameMonth(new Date(t.date), d));
+}
+
+export function splitByCurrency(tx: Transaction[], currency = BASE_CURRENCY) {
+  const base: Transaction[] = [];
+  const other: Transaction[] = [];
+  for (const t of tx) (t.currency === currency ? base : other).push(t);
+  return { base, other };
+}
+
+/** Income/expense totals per currency, base currency first. */
+export function totalsByCurrency(tx: Transaction[]) {
+  const m = new Map<string, { income: number; expense: number }>();
+  for (const t of tx) {
+    const v = m.get(t.currency) ?? { income: 0, expense: 0 };
+    if (t.amount > 0) v.income += t.amount;
+    else v.expense -= t.amount;
+    m.set(t.currency, v);
+  }
+  return [...m.entries()]
+    .map(([currency, v]) => ({ currency, ...v }))
+    .sort((a, b) => (a.currency === BASE_CURRENCY ? -1 : b.currency === BASE_CURRENCY ? 1 : a.currency.localeCompare(b.currency)));
 }
 
 export function totals(tx: Transaction[]) {

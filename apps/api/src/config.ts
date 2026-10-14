@@ -44,9 +44,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
   return {
     port: Number(env.PORT || 8787),
-    host: env.HOST || "0.0.0.0",
+    host: env.HOST || "127.0.0.1",
     dbPath: env.DB_PATH || "./data/expense.db",
-    corsOrigin: env.CORS_ORIGIN || "*",
+    corsOrigin: env.CORS_ORIGIN || "http://localhost:5173,http://localhost:4173",
     defaultCurrency: (env.DEFAULT_CURRENCY || "HUF").toUpperCase(),
     ai: {
       provider,

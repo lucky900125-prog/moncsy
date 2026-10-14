@@ -55,7 +55,7 @@ export async function exportXlsx(p: ExportPayload): Promise<Buffer> {
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
-function cellValue(v: ExcelJS.CellValue): unknown {
+export function cellValue(v: ExcelJS.CellValue): unknown {
   if (v === null || v === undefined) return "";
   if (v instanceof Date) return v.toISOString();
   if (typeof v === "object") {

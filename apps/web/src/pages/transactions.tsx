@@ -7,7 +7,8 @@ import { TransactionRow } from "@/components/transaction-row";
 import { useApp, useCategoryMap } from "@/store/app";
 import { useUi } from "@/store/ui";
 import { dayLabel, money } from "@/lib/format";
-import { inMonth, totals } from "@/lib/stats";
+import { inMonth, totalsByCurrency } from "@/lib/stats";
+import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 
 export function TransactionsPage() {
@@ -32,13 +33,13 @@ export function TransactionsPage() {
   const groups = useMemo(() => {
     const m = new Map<string, typeof filtered>();
     for (const t of filtered) {
-      const k = t.date.slice(0, 10);
+      const k = format(new Date(t.date), "yyyy-MM-dd"); // local calendar day, same as the label
       m.set(k, [...(m.get(k) ?? []), t]);
     }
     return [...m.entries()];
   }, [filtered]);
 
-  const sum = totals(filtered);
+  const sums = totalsByCurrency(filtered);
 
   return (
     <div className="flex flex-col gap-5">
@@ -46,8 +47,13 @@ export function TransactionsPage() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Tételek</h1>
           <p className="text-sm text-muted-foreground">
-            {filtered.length} tétel · <span className="tabular-nums">{money(-sum.expense)}</span>
-            {sum.income > 0 && <> · <span className="tabular-nums text-positive">{money(sum.income, "HUF", { sign: true })}</span></>}
+            {filtered.length} tétel
+            {sums.map((s) => (
+              <span key={s.currency}>
+                {s.expense > 0 && <> · <span className="tabular-nums">{money(-s.expense, s.currency)}</span></>}
+                {s.income > 0 && <> · <span className="tabular-nums text-positive">{money(s.income, s.currency, { sign: true })}</span></>}
+              </span>
+            ))}
           </p>
         </div>
         <MonthSwitcher value={month} onChange={setMonth} />
@@ -79,12 +85,14 @@ export function TransactionsPage() {
       ) : (
         <div className="flex flex-col gap-4">
           {groups.map(([day, items]) => {
-            const dayExp = items.reduce((s, t) => s + (t.amount < 0 ? -t.amount : 0), 0);
+            const dayExp = totalsByCurrency(items);
             return (
               <section key={day}>
                 <div className="flex items-baseline justify-between px-2 pb-1">
                   <h2 className="text-xs font-medium text-muted-foreground">{dayLabel(items[0].date)}</h2>
-                  {dayExp > 0 && <span className="text-xs tabular-nums text-muted-foreground">{money(-dayExp)}</span>}
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    {dayExp.filter((d) => d.expense > 0).map((d) => money(-d.expense, d.currency)).join(" · ")}
+                  </span>
                 </div>
                 <Card className="p-1.5">
                   {items.map((t) => (

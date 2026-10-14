@@ -30,7 +30,8 @@ export interface Transaction {
   /** ISO 8601 date-time */
   date: string;
   merchant: string;
-  note?: string;
+  /** null clears the note on PATCH */
+  note?: string | null;
   categoryId: string | null;
   source: TransactionSource;
   items?: ReceiptItem[];
