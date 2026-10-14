@@ -30,11 +30,15 @@ export function aggregate(
   defaultCurrency: string,
 ): Aggregate {
   const byCur = new Map<string, Transaction[]>();
-  for (const t of txs) byCur.set(t.currency, [...(byCur.get(t.currency) ?? []), t]);
+  for (const t of txs) {
+    const list = byCur.get(t.currency);
+    if (list) list.push(t);
+    else byCur.set(t.currency, [t]);
+  }
   const currency =
     [...byCur.entries()].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))[0]?.[0] ?? defaultCurrency;
   const main = byCur.get(currency) ?? [];
-  const catName = new Map(categories.map((c) => [c.id, c] as const));
+  const catById = new Map(categories.map((c) => [c.id, c] as const));
 
   const income = main.filter((t) => t.amount > 0).reduce((s, t) => s + t.amount, 0);
   const expense = main.filter((t) => t.amount < 0).reduce((s, t) => s - t.amount, 0);
@@ -61,7 +65,7 @@ export function aggregate(
     }
     monthAgg.set(month, m);
   }
-  const nameOf = (id: string | null) => (id ? (catName.get(id)?.name ?? id) : "Kategória nélkül");
+  const nameOf = (id: string | null) => (id ? (catById.get(id)?.name ?? id) : "Kategória nélkül");
 
   const monthly = [...monthAgg.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
@@ -101,7 +105,7 @@ export function aggregate(
         expense: round2(v.expense),
         share: expense > 0 ? round2(v.expense / expense) : 0,
         count: v.count,
-        budget: id ? (catName.get(id)?.budget ?? null) : null,
+        budget: id ? (catById.get(id)?.budget ?? null) : null,
       }))
       .sort((a, b) => b.expense - a.expense),
     topMerchants: [...merchAgg.values()]

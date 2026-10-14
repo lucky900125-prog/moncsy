@@ -18,7 +18,9 @@ export default function Transactions() {
     for (const x of transactions) {
       if (needle && !x.merchant.toLowerCase().includes(needle) && !(x.note ?? "").toLowerCase().includes(needle)) continue;
       const k = dayKey(x.date); // local calendar day
-      m.set(k, [...(m.get(k) ?? []), x]);
+      const group = m.get(k);
+      if (group) group.push(x);
+      else m.set(k, [x]);
     }
     return [...m.entries()].map(([key, data]) => {
       const spend = new Map<string, number>();

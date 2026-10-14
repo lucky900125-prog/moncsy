@@ -34,7 +34,9 @@ export function TransactionsPage() {
     const m = new Map<string, typeof filtered>();
     for (const t of filtered) {
       const k = format(new Date(t.date), "yyyy-MM-dd"); // local calendar day, same as the label
-      m.set(k, [...(m.get(k) ?? []), t]);
+      const group = m.get(k);
+      if (group) group.push(t);
+      else m.set(k, [t]);
     }
     return [...m.entries()];
   }, [filtered]);

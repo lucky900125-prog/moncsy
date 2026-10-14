@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Category, ReceiptItem, Summary, Transaction, TransactionSource } from "@et/shared";
-import type { DB } from "./db.js";
+import { transaction, type DB } from "./db.js";
 import { HttpError, badRequest, notFound } from "./errors.js";
 import type { CategoryCreate, CategoryPatch, TransactionCreate, TransactionPatch } from "./schemas.js";
 
@@ -121,16 +121,11 @@ export class Repository {
     const cur = this.getCategory(id);
     if (!cur) throw notFound(`Category "${id}" not found`);
     if (!cur.isCustom) throw new HttpError(409, `Category "${cur.name}" is built in and cannot be deleted`);
-    this.db.exec("BEGIN");
-    try {
+    transaction(this.db, () => {
       this.db.prepare("UPDATE transactions SET category_id = NULL WHERE category_id = ?").run(id);
       this.db.prepare("UPDATE categories SET parent_id = NULL WHERE parent_id = ?").run(id);
       this.db.prepare("DELETE FROM categories WHERE id = ?").run(id);
-      this.db.exec("COMMIT");
-    } catch (e) {
-      this.db.exec("ROLLBACK");
-      throw e;
-    }
+    });
   }
 
   // ---------- transactions ----------
@@ -153,16 +148,14 @@ export class Repository {
         params.push(f.categoryId);
       }
     }
+    const sql = `SELECT * FROM transactions ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY date DESC, id`;
+    let rows = this.db.prepare(sql).all(...params) as unknown as TransactionRow[];
     if (f.q && f.q.trim()) {
       // SQLite's LOWER() is ASCII-only, so match case-insensitively in JS for Hungarian accents.
-      const sql = `SELECT * FROM transactions ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY date DESC, id`;
       const needle = f.q.trim().toLocaleLowerCase("hu");
-      return (this.db.prepare(sql).all(...params) as unknown as TransactionRow[])
-        .filter((r) => `${r.merchant}\n${r.note ?? ""}`.toLocaleLowerCase("hu").includes(needle))
-        .map(rowToTransaction);
+      rows = rows.filter((r) => `${r.merchant}\n${r.note ?? ""}`.toLocaleLowerCase("hu").includes(needle));
     }
-    const sql = `SELECT * FROM transactions ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY date DESC, id`;
-    return (this.db.prepare(sql).all(...params) as unknown as TransactionRow[]).map(rowToTransaction);
+    return rows.map(rowToTransaction);
   }
 
   getTransaction(id: string): Transaction | null {

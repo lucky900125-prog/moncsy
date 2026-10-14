@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { create } from "zustand";
 import type { Category, Transaction } from "@et/shared";
 import { detectBackend, type Backend } from "@/lib/backend";
@@ -79,7 +80,8 @@ export const useApp = create<AppState>((set, get) => {
   };
 });
 
+/** Memoized per categories array, so it is a stable useMemo/useEffect dependency in pages. */
 export function useCategoryMap() {
   const categories = useApp((s) => s.categories);
-  return new Map(categories.map((c) => [c.id, c]));
+  return useMemo(() => new Map(categories.map((c) => [c.id, c])), [categories]);
 }

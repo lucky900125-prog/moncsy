@@ -3,12 +3,19 @@ import { hu } from "date-fns/locale";
 
 export const BASE_CURRENCY = "HUF";
 
+const fmtCache = new Map<string, Intl.NumberFormat>();
+
 export function money(amount: number, currency = BASE_CURRENCY, sign = false) {
-  const s = new Intl.NumberFormat("hu-HU", {
-    style: "currency",
-    currency,
-    maximumFractionDigits: currency === "HUF" ? 0 : 2,
-  }).format(Math.abs(amount));
+  let f = fmtCache.get(currency);
+  if (!f) {
+    f = new Intl.NumberFormat("hu-HU", {
+      style: "currency",
+      currency,
+      maximumFractionDigits: currency === "HUF" ? 0 : 2,
+    });
+    fmtCache.set(currency, f);
+  }
+  const s = f.format(Math.abs(amount));
   if (amount < 0) return `−${s}`;
   return sign ? `+${s}` : s;
 }
