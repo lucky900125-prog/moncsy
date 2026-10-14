@@ -39,7 +39,7 @@ function Stat({ label, value, delta, invert, tone, className, size = "md" }: { l
 
 export function DashboardPage() {
   const [month, setMonth] = useState(() => new Date());
-  const { transactions, status, error } = useApp();
+  const { transactions, status } = useApp();
   const cats = useCategoryMap();
   const openTx = useUi((s) => s.openTx);
 
@@ -58,14 +58,7 @@ export function DashboardPage() {
     return { cur, foreign, t, p, series, cats: byCategory(cur, cats) };
   }, [transactions, month, cats]);
 
-  if (status === "error") {
-    return (
-      <Card className="flex flex-col items-start gap-3 p-6 text-sm">
-        <p className="text-destructive">Nem sikerült betölteni az adatokat: {error}</p>
-        <Button asChild variant="outline" size="sm"><Link to="/beallitasok">Kapcsolat beállítása</Link></Button>
-      </Card>
-    );
-  }
+  // A failed load is shown by the layout instead of this page.
   if (status === "loading") {
     return <div className="grid gap-4 sm:grid-cols-3">{[0, 1, 2].map((i) => <div key={i} className="h-28 animate-pulse rounded-xl bg-muted" />)}</div>;
   }

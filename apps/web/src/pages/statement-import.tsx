@@ -73,6 +73,9 @@ export function StatementImportPage() {
   const [dragging, setDragging] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
   const reqId = useRef(0);
+  const ccy = currency.trim().toUpperCase();
+  // The server only takes a 3-letter code here; anything else is refused before the file is sent.
+  const ccyInvalid = ccy !== "" && !/^[A-Z]{3}$/.test(ccy);
 
   async function read(f: File, mapping?: StatementMapping, opts: { remembered?: boolean } = {}) {
     if (!backend) return;
@@ -80,7 +83,7 @@ export function StatementImportPage() {
     setError(null);
     setPhase("reading");
     try {
-      const p = await backend.parseStatement(f, { mapping, currency: currency.trim().toUpperCase() || undefined });
+      const p = await backend.parseStatement(f, { mapping, currency: ccy || undefined });
       if (id !== reqId.current) return; // a newer read (e.g. another mapping change) superseded this one
       // First read of a known layout: apply the mapping the user chose last time for it.
       if (!mapping && !opts.remembered && p.columns.length) {
@@ -98,7 +101,7 @@ export function StatementImportPage() {
   }
 
   function choose(f: File | undefined) {
-    if (!f) return;
+    if (!f || ccyInvalid) return;
     setFile(f);
     setPreview(null);
     setResult(null);
@@ -214,10 +217,11 @@ export function StatementImportPage() {
             <p className="text-sm font-medium">Húzd ide a kivonatot, vagy válaszd ki</p>
             <p className="text-xs text-muted-foreground">Max. 10 MB. A régi .xls fájlt előbb mentsd el .xlsx vagy .csv formában.</p>
           </div>
-          <Button onClick={() => fileRef.current?.click()} disabled={!backend}><Upload /> Fájl kiválasztása</Button>
+          <Button onClick={() => fileRef.current?.click()} disabled={!backend || ccyInvalid}><Upload /> Fájl kiválasztása</Button>
           <div className="grid w-full max-w-56 gap-1.5 text-left">
             <Label htmlFor="ccy" className="text-xs text-muted-foreground">Pénznem, ha a fájlban nincs (opcionális)</Label>
-            <Input id="ccy" value={currency} onChange={(e) => setCurrency(e.target.value)} placeholder="HUF" maxLength={3} className="h-9 uppercase" />
+            <Input id="ccy" value={currency} onChange={(e) => setCurrency(e.target.value)} placeholder="HUF" maxLength={3} aria-invalid={ccyInvalid} aria-describedby={ccyInvalid ? "ccy-error" : undefined} className="h-9 uppercase" />
+            {ccyInvalid && <p id="ccy-error" className="text-xs text-destructive">3 betűs pénznemkód kell, például HUF vagy EUR.</p>}
           </div>
         </Card>
       ) : (

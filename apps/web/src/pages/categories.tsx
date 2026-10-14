@@ -13,7 +13,7 @@ import { CategoryBadgeIcon } from "@/components/category-dot";
 import { useApp } from "@/store/app";
 import { CATEGORY_COLORS, CategoryIcon, PICKABLE_ICONS } from "@/lib/icons";
 import { money } from "@/lib/format";
-import { byCategory, inMonth } from "@/lib/stats";
+import { BASE_CURRENCY, flowsByCategory, inMonth, splitByCurrency } from "@/lib/stats";
 import { cn } from "@/lib/utils";
 
 type Editing = { open: boolean; cat: Category | null };
@@ -26,10 +26,11 @@ export function CategoriesPage() {
   const [color, setColor] = useState(CATEGORY_COLORS[0]);
   const [budget, setBudget] = useState("");
 
-  const spent = useMemo(() => {
-    const m = new Map(categories.map((c) => [c.id, c]));
-    return new Map(byCategory(inMonth(transactions, new Date()), m).map((x) => [x.id, x.value]));
-  }, [transactions, categories]);
+  // Budgets are in the base currency, so only that is summed; other currencies are counted and named instead.
+  const month = useMemo(() => {
+    const { base, other } = splitByCurrency(inMonth(transactions, new Date()));
+    return { flows: flowsByCategory(base), foreign: other };
+  }, [transactions]);
 
   function open(cat: Category | null) {
     setName(cat?.name ?? "");
@@ -74,9 +75,15 @@ export function CategoriesPage() {
         <Button onClick={() => open(null)}><Plus /> Új</Button>
       </div>
 
+      {month.foreign.length > 0 && (
+        <p className="-mt-2 text-xs text-muted-foreground">
+          {month.foreign.length} tétel más pénznemben ({[...new Set(month.foreign.map((t) => t.currency))].join(", ")}) van ebben a hónapban, ezek nincsenek benne a {BASE_CURRENCY} összegekben.
+        </p>
+      )}
+
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {categories.map((c) => {
-          const s = spent.get(c.id) ?? 0;
+          const { expense: s, income } = month.flows.get(c.id) ?? { expense: 0, income: 0 };
           return (
             <button key={c.id} onClick={() => open(c)} className="text-left">
               <Card className="flex h-full flex-col gap-3 p-4 transition-colors duration-200 hover:bg-muted/50">
@@ -84,7 +91,11 @@ export function CategoriesPage() {
                   <CategoryBadgeIcon category={c} />
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-medium">{c.name}</div>
-                    <div className="text-xs tabular-nums text-muted-foreground">{money(s)} ebben a hónapban</div>
+                    <div className="text-xs tabular-nums text-muted-foreground">
+                      {(s > 0 || income === 0) && money(s)}
+                      {s > 0 && income > 0 && " · "}
+                      {income > 0 && <span className="text-positive">{money(income, BASE_CURRENCY, { sign: true })}</span>} ebben a hónapban
+                    </div>
                   </div>
                   {c.isCustom && <Badge>egyedi</Badge>}
                 </div>

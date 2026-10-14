@@ -52,6 +52,9 @@ function cellRows() {
 const ROLE_LABEL: Partial<Record<StatementRole, string>> = { date: "dátum", amount: "összeg" };
 
 export function demoParseStatement(opts: { mapping?: StatementMapping; currency?: string } = {}): StatementPreview {
+  // Same currency rules as the server (routes/statements.ts, statements/tabular.ts): the field has to be a 3-letter
+  // code, and a row whose currency is not one is an error for that row.
+  if (opts.currency && !/^[A-Za-z]{3}$/.test(opts.currency)) throw new Error('"currency" must be an ISO 4217 code');
   // Same rule as the server: an explicit entry wins, "" means "no column", anything else is auto-detected.
   const mapping: StatementMapping = { ...DETECTED };
   for (const [role, col] of Object.entries(opts.mapping ?? {}) as [StatementRole, string][]) {
@@ -75,13 +78,19 @@ export function demoParseStatement(opts: { mapping?: StatementMapping; currency?
       errors.push(`${i + 2}. sor: nem olvasható dátum vagy összeg`);
       return;
     }
+    const rawCurrency = (mapping.currency ? cells[mapping.currency] : opts.currency) || "HUF";
+    const currency = /^ft\.?$|forint/i.test(rawCurrency.trim()) ? "HUF" : rawCurrency.trim().toUpperCase();
+    if (!/^[A-Z]{3}$/.test(currency)) {
+      errors.push(`${i + 2}. sor: ismeretlen pénznem: ${rawCurrency}`);
+      return;
+    }
     const merchant = cells[mapping.counterparty ?? ""] ?? cells[mapping.description ?? ""] ?? "";
     const note = mapping.description && mapping.description !== mapping.counterparty ? cells[mapping.description] : undefined;
     transactions.push({
       externalId: `demo-stmt:${iso.slice(0, 10)}:${amount}:${merchant}`,
       date: iso,
       amount: parsed,
-      currency: (mapping.currency ? cells[mapping.currency] : opts.currency) || "HUF",
+      currency,
       merchant,
       ...(note ? { note } : {}),
       categoryId: cat,

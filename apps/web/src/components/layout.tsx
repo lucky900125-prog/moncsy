@@ -1,6 +1,7 @@
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { LayoutGrid, ListOrdered, ScanLine, Sparkles, Settings2, Tags, Plus, Loader2, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { TransactionSheet } from "./transaction-sheet";
 import { useApp } from "@/store/app";
 import { useUi } from "@/store/ui";
@@ -51,10 +52,26 @@ function WakingNotice() {
   );
 }
 
+/**
+ * A failed load replaces every page, so an unreachable API or a rejected token never reads as an empty account.
+ * The settings page stays open, since that is where the connection is fixed; it shows the error itself.
+ */
+function LoadError() {
+  const error = useApp((s) => s.error);
+  return (
+    <Card className="flex flex-col items-start gap-3 p-6 text-sm">
+      <p className="text-destructive">Nem sikerült betölteni az adatokat: {error}</p>
+      <Button asChild variant="outline" size="sm"><Link to="/beallitasok">Kapcsolat beállítása</Link></Button>
+    </Card>
+  );
+}
+
 export function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
   const openTx = useUi((s) => s.openTx);
+  const failed = useApp((s) => s.status === "error");
+  const onSettings = location.pathname.replace(/\/$/, "") === "/beallitasok";
 
   return (
     <div className="min-h-dvh md:grid md:grid-cols-[240px_1fr]">
@@ -104,7 +121,7 @@ export function Layout() {
         {/* Keyed by the top-level section: switching tabs inside a section (Elemzés / Részletek) must not replay the page entrance. */}
         <main key={location.pathname.split("/")[1]} className="mx-auto w-full max-w-5xl flex-1 animate-rise-in px-4 pb-28 pt-5 md:px-8 md:pb-10 md:pt-8">
           <WakingNotice />
-          <Outlet />
+          {failed && !onSettings ? <LoadError /> : <Outlet />}
         </main>
       </div>
 
