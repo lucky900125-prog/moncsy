@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # No job pushes, so the token is not left in the checkout's git config for later steps to find.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       # The commit the v4 tag pointed to when this was pinned: a tag can be moved to other code, a commit cannot.
@@ -59,7 +59,7 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
