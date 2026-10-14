@@ -17,7 +17,7 @@ The API uses SQLite through **`node:sqlite`**, which is built into Node, rather 
 
 Everything above the database talks to the small async `DB` interface in `db.ts` (`all`, `get`, `run`, `exec`, `tx`, `close`), so another engine can be dropped in without touching the repository. `tx()` runs one transaction at a time; queries outside it wait for it to finish.
 
-The database is created at `DB_PATH` on first run. The default categories come from `packages/shared` (`DEFAULT_CATEGORIES`) and are seeded on every start with `INSERT OR IGNORE`: a category added to the list later appears in existing databases on the next start, while rows the user has edited are left alone. Their ids are stable English slugs and their names are Hungarian:
+The database is created at `DB_PATH` on first run. Its schema changes are the ordered list `MIGRATIONS` in `src/db.ts`. The database records how many it has had (meta `schema_version`), and on start each missing one runs once, in its own transaction. A database made before versioning counts as version 1 and is taken over unchanged. A database with a higher version than the server knows was written by a newer release, so the server refuses to start rather than run older code on it. A schema change is a new entry at the end of the list; an entry that databases already have is never edited. The default categories come from `packages/shared` (`DEFAULT_CATEGORIES`) and are seeded on every start with `INSERT OR IGNORE`: a category added to the list later appears in existing databases on the next start, while rows the user has edited are left alone. Their ids are stable English slugs and their names are Hungarian:
 
 | id | name | icon (lucide) | color |
 |---|---|---|---|
