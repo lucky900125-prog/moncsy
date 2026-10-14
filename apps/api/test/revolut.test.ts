@@ -59,6 +59,22 @@ describe("Revolut statement parsing", () => {
     expect(await parseStatementXlsx(Buffer.from(await wb.xlsx.writeBuffer()))).toEqual({ rows: [], errors: [] });
     expect(() => parseStatementCsv("")).toThrow(/Not a Revolut statement/);
   });
+
+  it("reads a description with a stray quote instead of failing the whole file", async () => {
+    const csv = `Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance
+CARD_PAYMENT,Current,2026-10-01 08:15:42,2026-10-02 09:01:10,Spar 5" cable,-4785.00,0.00,HUF,COMPLETED,120215.00
+`;
+    const { rows, errors } = parseStatementCsv(csv);
+    expect(errors).toEqual([]);
+    expect(rows.map((r) => r.description)).toEqual(['Spar 5" cable']);
+
+    const app = await testApp();
+    for (const url of ["/api/revolut/import-statement", "/api/statements/parse"]) {
+      const r = await app.inject({ method: "POST", url, ...multipart("statement.csv", "text/csv", csv) });
+      expect(r.statusCode, `${url}: ${r.body}`).toBe(200);
+    }
+    await app.close();
+  });
 });
 
 describe("POST /api/revolut/import-statement", () => {

@@ -423,6 +423,29 @@ describe("HTTP /statements", () => {
     await app.close();
   });
 
+  it("reads a header-less file whose hand-picked amount column starts with a non-amount, instead of failing with 500", async () => {
+    const app = await testApp();
+    const body = "2026.10.01;abc;Tesco\n2026.10.02;-500;BKK\n";
+    const boundary = "----etbad";
+    const payload = Buffer.from(
+      [
+        `--${boundary}\r\nContent-Disposition: form-data; name="mapping"\r\n\r\n${JSON.stringify({ date: "2026.10.01", amount: "abc", counterparty: "Tesco" })}\r\n`,
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="x.csv"\r\nContent-Type: text/csv\r\n\r\n${body}\r\n`,
+        `--${boundary}--\r\n`,
+      ].join(""),
+    );
+    const r = await app.inject({
+      method: "POST",
+      url: "/api/statements/parse",
+      payload,
+      headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+    });
+    expect(r.statusCode, r.body).toBe(200);
+    // The first row is not a transaction (no amount), so it is the header; the second row is read.
+    expect(r.json().transactions).toMatchObject([{ merchant: "BKK", amount: -500 }]);
+    await app.close();
+  });
+
   it("takes a hand-made mapping and a currency sent before the file", async () => {
     const app = await testApp();
     const body = "Mikor;Mennyi;Kinek\n2026.10.01;-100;Valaki\n";
