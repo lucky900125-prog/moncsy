@@ -80,7 +80,7 @@ export function parseCamt(xml: string, timeZone: string): FormatResult {
         const description = [...arr(tx?.RmtInf?.Ustrd).map(str), str(e.AddtlNtryInf)].filter(Boolean).join(" ");
         const ref = str(e.AcctSvcrRef) || str(e.NtryRef) || str(tx?.Refs?.AcctSvcrRef) || str(tx?.Refs?.EndToEndId).replace(/^NOTPROVIDED$/, "");
         res.transactions.push(
-          buildTx({ date: parseStatementDate(dateRaw.slice(0, 19).replace("T", " "), "ymd", timeZone), amount, currency, counterparty, description, ref }, seen),
+          buildTx({ date: camtDate(dateRaw, timeZone), amount, currency, counterparty, description, ref }, seen),
         );
       } catch (err) {
         res.errors.push(`${where}: ${(err as Error).message}`);
@@ -90,15 +90,37 @@ export function parseCamt(xml: string, timeZone: string): FormatResult {
   return res;
 }
 
+/** A CAMT DtTm with Z or an offset is an instant; a date or a time without one is the bank's local time. */
+function camtDate(raw: string, timeZone: string): string {
+  if (/T.*(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw)) {
+    const t = Date.parse(raw);
+    if (Number.isNaN(t)) throw new Error(`invalid date "${raw}"`);
+    return new Date(t).toISOString();
+  }
+  return parseStatementDate(raw.slice(0, 19).replace("T", " "), "ymd", timeZone);
+}
+
+/** OFX dates are YYYYMMDD[HHMMSS[.XXX]][[offset:TZ]]; with a time and an offset they are an instant. */
+function ofxDate(raw: string, timeZone: string): string {
+  const m = raw.match(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})?(?:\.\d+)?\s*\[\s*([+-]?\d+(?:\.\d+)?)(?::[^\]]*)?\]/);
+  if (!m) return parseStatementDate(raw.slice(0, 14), "ymd", timeZone);
+  const local = Date.UTC(+m[1]!, +m[2]! - 1, +m[3]!, +m[4]!, +m[5]!, +(m[6] ?? 0));
+  return new Date(local - Number(m[7]) * 3_600_000).toISOString();
+}
+
 /** OFX / QFX (Money, Quicken). Version 1 is SGML with unclosed tags, version 2 is XML; both are read tag by tag. */
 export function parseOfx(text: string, timeZone: string): FormatResult {
   const tag = (block: string, name: string) => block.match(new RegExp(`<${name}>([^<\\r\\n]*)`, "i"))?.[1]?.trim() ?? "";
-  const currency = tag(text, "CURDEF") || null;
-  const blocks = [...text.matchAll(/<STMTTRN>([\s\S]*?)(?=<\/STMTTRN>|<STMTTRN>|<\/BANKTRANLIST>)/gi)].map((m) => m[1]!);
+  // A file can hold several statements (accounts, cards), each with its own CURDEF before its transactions.
+  const curdefs = [...text.matchAll(/<CURDEF>\s*([A-Za-z]{3})/gi)].map((m) => ({ at: m.index, ccy: m[1]!.toUpperCase() }));
+  const blocks = [...text.matchAll(/<STMTTRN>([\s\S]*?)(?=<\/STMTTRN>|<STMTTRN>|<\/BANKTRANLIST>)/gi)].map((m) => ({
+    body: m[1]!,
+    currency: curdefs.filter((c) => c.at < m.index).at(-1)?.ccy ?? null,
+  }));
   if (!blocks.length) throw badRequest("No <STMTTRN> transactions found in the OFX file");
-  const res: FormatResult = { currency, transactions: [], ignored: 0, errors: [] };
+  const res: FormatResult = { currency: curdefs[0]?.ccy ?? null, transactions: [], ignored: 0, errors: [] };
   const seen = new Map<string, number>();
-  blocks.forEach((b, i) => {
+  blocks.forEach(({ body: b, currency }, i) => {
     try {
       // OFX allows a comma as the decimal mark and no thousands separator, so the last mark in the value is the decimal one.
       const rawAmount = tag(b, "TRNAMT");
@@ -112,7 +134,7 @@ export function parseOfx(text: string, timeZone: string): FormatResult {
       res.transactions.push(
         buildTx(
           {
-            date: parseStatementDate(posted.slice(0, 14), "ymd", timeZone),
+            date: ofxDate(posted, timeZone),
             amount,
             currency: ccy,
             counterparty: tag(b, "NAME") || tag(b, "PAYEE"),
@@ -156,7 +178,8 @@ export function parseMt940(text: string, timeZone: string): FormatResult {
       const m = f.value.match(/^(\d{2})(\d{2})(\d{2})(\d{4})?(R?[CD])[A-Z]?(\d+,\d*)([A-Z]\w{3})?([^\n/]*)(?:\/\/([^\n]*))?/);
       if (!m) throw new Error(`unreadable :61: line "${f.value.split("\n")[0]}"`);
       const [, yy, mm, dd, , mark, amt, , custRef, bankRef] = m;
-      const value = parseAmount(amt!, ",")!;
+      // MT940 writes whole amounts with a bare decimal comma: "12000,".
+      const value = parseAmount(amt!.replace(/,$/, ""), ",")!;
       // RC (reversal of credit) moves money out, RD (reversal of debit) moves it back in.
       const out = mark === "D" || mark === "RC";
       const next = fields[i + 1];

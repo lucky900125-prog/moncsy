@@ -1,12 +1,11 @@
 import { createHash } from "node:crypto";
 import { parse } from "csv-parse/sync";
-import ExcelJS from "exceljs";
 import type { RevolutStatus } from "@et/shared";
 import { getMeta, setMeta } from "../db.js";
 import { badRequest } from "../errors.js";
 import type { Repository } from "../repository.js";
 import { categorize } from "./categorize.js";
-import { cellValue } from "../io/xlsx.js";
+import { cellValue, loadWorkbook } from "../io/xlsx.js";
 import { META_CSV_ACCOUNTS, META_LAST_SYNC, type RevolutProvider } from "./types.js";
 
 /** One row of the Revolut app's "Account statement" export (Excel or CSV). */
@@ -47,11 +46,19 @@ const HEADER_ALIASES: Record<keyof StatementRow, string[]> = {
   balance: ["balance"],
 };
 
+/** One formatter per time zone: building one costs far more than using it, and a statement converts every row. */
+const tzFormats = new Map<string, Intl.DateTimeFormat>();
+
 /** Offset (ms) of `timeZone` from UTC at the given instant. */
 function tzOffset(utcMs: number, timeZone: string): number {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit",
-  }).formatToParts(new Date(utcMs));
+  let format = tzFormats.get(timeZone);
+  if (!format) {
+    format = new Intl.DateTimeFormat("en-US", {
+      timeZone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit",
+    });
+    tzFormats.set(timeZone, format);
+  }
+  const parts = format.formatToParts(new Date(utcMs));
   const get = (t: string) => Number(parts.find((p) => p.type === t)!.value);
   return Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second")) - utcMs;
 }
@@ -143,12 +150,7 @@ export function parseStatementCsv(text: string): { rows: StatementRow[]; errors:
 }
 
 export async function parseStatementXlsx(buf: Buffer): Promise<{ rows: StatementRow[]; errors: string[] }> {
-  const wb = new ExcelJS.Workbook();
-  try {
-    await wb.xlsx.load(buf as unknown as ArrayBuffer);
-  } catch (e) {
-    throw badRequest(`Not a readable XLSX file: ${(e as Error).message}`);
-  }
+  const wb = await loadWorkbook(buf, "Not a readable XLSX file");
   const ws = wb.worksheets[0];
   if (!ws) throw badRequest("The XLSX file has no worksheets");
   const header: string[] = [];

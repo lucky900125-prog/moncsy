@@ -1,10 +1,9 @@
 import { parse } from "csv-parse/sync";
-import ExcelJS from "exceljs";
 import { z } from "zod";
 import type { StatementFormat, StatementMapping, StatementPreview, StatementTx } from "@et/shared";
 import type { AIProvider } from "../ai/index.js";
 import { HttpError, badRequest } from "../errors.js";
-import { cellValue } from "../io/xlsx.js";
+import { cellValue, loadWorkbook } from "../io/xlsx.js";
 import type { Repository } from "../repository.js";
 import { parseStatementCsv, parseStatementXlsx, toTransactions } from "../revolut/csv.js";
 import { isoDate } from "../schemas.js";
@@ -80,20 +79,22 @@ function fromRevolut(rows: Awaited<ReturnType<typeof parseStatementXlsx>>): Omit
   };
 }
 
+/** Far more than any bank statement has; a cell far out would otherwise make the arrays below that long. */
+const MAX_XLSX_ROWS = 100_000;
+const MAX_XLSX_COLUMNS = 200;
+
 async function xlsxRows(data: Buffer): Promise<Cell[][]> {
-  const wb = new ExcelJS.Workbook();
-  try {
-    await wb.xlsx.load(data as unknown as ArrayBuffer);
-  } catch (e) {
-    throw badRequest(`Not a readable XLSX file: ${(e as Error).message}`);
-  }
+  const wb = await loadWorkbook(data, "Not a readable XLSX file");
   // The statement is the sheet with the most filled rows; banks sometimes add a cover sheet.
   const ws = [...wb.worksheets].sort((a, b) => b.actualRowCount - a.actualRowCount)[0];
   if (!ws) throw badRequest("The XLSX file has no worksheets");
   const rows: Cell[][] = [];
-  ws.eachRow({ includeEmpty: true }, (row, n) => {
+  // Only cells with a value: with includeEmpty, a formatted cell at the sheet's far corner makes millions of empty ones.
+  ws.eachRow((row, n) => {
+    if (n > MAX_XLSX_ROWS) throw badRequest(`The sheet has a value in row ${n}; statements of more than ${MAX_XLSX_ROWS} rows are not read`);
     const cells: Cell[] = [];
-    row.eachCell({ includeEmpty: true }, (cell, c) => {
+    row.eachCell((cell, c) => {
+      if (c > MAX_XLSX_COLUMNS) throw badRequest(`The sheet has a value in column ${c}; more than ${MAX_XLSX_COLUMNS} columns are not read`);
       const v = cell.value;
       cells[c - 1] = v instanceof Date || typeof v === "number" ? v : (String(cellValue(v)) as Cell);
     });
@@ -107,7 +108,8 @@ export function sniffStatement(data: Buffer, filename: string): StatementFormat 
   if (head.subarray(0, 4).toString("latin1") === "%PDF") return "pdf";
   if (head.subarray(0, 2).toString("latin1") === "PK") return "xlsx";
   if (head.equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]))) return "xls";
-  if (/\.xls$/i.test(filename)) return "xls";
+  // Old Excel saved as HTML or SpreadsheetML is also named .xls; tab-separated text with that name is read as text.
+  if (/\.xls$/i.test(filename) && (data.includes(0) || /^(\uFEFF|\xEF\xBB\xBF)?\s*</.test(data.subarray(0, 256).toString("latin1")))) return "xls";
   return "text";
 }
 

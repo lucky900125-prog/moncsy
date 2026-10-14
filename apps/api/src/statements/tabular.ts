@@ -52,7 +52,8 @@ export function detectMapping(header: string[], explicit: StatementMapping = {})
       taken.add(col);
     }
   }
-  const folded = header.map((h) => [h, fold(h).replace(/\(.*?\)/g, "").trim()] as const);
+  // [^()]* rather than .*?: an unclosed "(" in a long cell would otherwise make this quadratic.
+  const folded = header.map((h) => [h, fold(h).replace(/\([^()]*\)/g, "").trim()] as const);
   for (const pass of ["exact", "contains"] as const) {
     for (const role of ROLE_ORDER) {
       if (mapping[role] || role in explicit) continue;
@@ -86,8 +87,8 @@ export function findHeaderRow(rows: Cell[][]): number {
   return -1;
 }
 
-const DEBIT_WORDS = /^(t|d|db|dr|dbit|debit|terheles|kiadas|kimeno|soll|s|-)$/;
-const CREDIT_WORDS = /^(j|c|cr|crdt|credit|jovairas|bevetel|bejovo|haben|h|\+)$/;
+const DEBIT_WORDS = /^(t|d|db|dr|dbit|debit|terheles|kiadas|kimeno|soll|s|out|outgoing|withdrawal|-)$/;
+const CREDIT_WORDS = /^(j|c|cr|crdt|credit|jovairas|bevetel|bejovo|haben|h|in|incoming|deposit|\+)$/;
 
 export interface TabularOptions {
   mapping?: StatementMapping;
@@ -114,6 +115,17 @@ export function rowExternalId(parts: (string | number)[], seen: Map<string, numb
   return n === 0 ? `stmt:${h}` : `stmt:${h}:${n}`;
 }
 
+function isTransactionRow(r: Cell[], idx: Partial<Record<StatementRole, number>>, timeZone: string): boolean {
+  const d = r[idx.date ?? idx.valueDate ?? -1];
+  if (d == null || String(d).trim() === "") return false;
+  try {
+    parseStatementDate(d, detectDateOrder([d]), timeZone);
+  } catch {
+    return false;
+  }
+  return [idx.amount, idx.debit, idx.credit].some((i) => i !== undefined && parseAmount(r[i], detectDecimal([r[i]])) !== null);
+}
+
 export function parseTabular(rows: Cell[][], opts: TabularOptions): TabularResult {
   const chosen = Object.values(opts.mapping ?? {}).filter((c): c is string => Boolean(c));
   const label = (c: Cell, i: number) => (c == null || String(c).trim() === "" ? `Oszlop ${i + 1}` : String(c).trim());
@@ -137,16 +149,27 @@ export function parseTabular(rows: Cell[][], opts: TabularOptions): TabularResul
     };
   }
   const idx = Object.fromEntries(Object.entries(mapping).map(([r, c]) => [r, columns.indexOf(c!)])) as Partial<Record<StatementRole, number>>;
+  // A file without a header offers its first row as the column names; when that row is chosen, it is still a transaction.
+  // A real header never reads as a date and an amount.
+  const headerIsData = chosen.length > 0 && isTransactionRow(rows[headerIdx]!, idx, opts.timeZone);
   // line = 1-based row in the file, for error messages
   const body = rows
     .map((r, i) => ({ r, line: i + 1 }))
-    .slice(headerIdx + 1)
+    .slice(headerIsData ? headerIdx : headerIdx + 1)
     .filter(({ r }) => r.some((c) => c != null && String(c).trim() !== ""));
   const col = (role: StatementRole) => (idx[role] === undefined ? [] : body.map(({ r }) => r[idx[role]!]));
 
   const decimal = detectDecimal([...col("amount"), ...col("debit"), ...col("credit")]);
+  // With unsigned amounts the direction column is the only sign, so a value it does not know cannot be guessed.
+  const amountsSigned = col("amount").some((v) => {
+    try {
+      return (parseAmount(v, decimal) ?? 0) < 0;
+    } catch {
+      return false;
+    }
+  });
   const order = detectDateOrder([...col("date"), ...col("valueDate")]);
-  const headerCurrency = [mapping.amount, mapping.debit, mapping.credit].map((h) => (h ? currencyFrom(h.match(/\((.*?)\)/)?.[1] ?? "") : null)).find(Boolean);
+  const headerCurrency = [mapping.amount, mapping.debit, mapping.credit].map((h) => (h ? currencyFrom(h.match(/\(([^()]*)\)/)?.[1] ?? "") : null)).find(Boolean);
   const fileCurrency = opts.currency?.toUpperCase() || headerCurrency || null;
 
   const transactions: StatementTx[] = [];
@@ -173,6 +196,7 @@ export function parseTabular(rows: Cell[][], opts: TabularOptions): TabularResul
         if (amount !== null && dir) {
           if (DEBIT_WORDS.test(dir)) amount = -Math.abs(amount);
           else if (CREDIT_WORDS.test(dir)) amount = Math.abs(amount);
+          else if (!amountsSigned) throw new Error(`unknown direction "${text("direction")}"`);
         }
       } else {
         const out = parseAmount(get("debit"), decimal);

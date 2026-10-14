@@ -70,7 +70,7 @@ const STORE_NOISE = new Set([
 /** "SPAR Magyarország Kft." and "Spar" are the same store; legal forms and country words are dropped. */
 export function storeName(merchant: string): string {
   const words = merchant
-    .replace(/\(.*?\)/g, " ")
+    .replace(/\([^()]*\)/g, " ")
     .replace(/[-–,]/g, " ")
     .split(/\s+/)
     .map((w) => w.replace(/\.+$/, ""))

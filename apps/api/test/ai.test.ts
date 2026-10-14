@@ -61,6 +61,16 @@ describe("POST /api/receipts/scan (mock provider)", () => {
     }
   });
 
+  it("keeps the scan when only a product detail of a line is off", async () => {
+    const item = { name: "Tej", unitPrice: 459, total: 459, product: "", brand: "", packSize: 0, packUnit: "L" };
+    const answer = JSON.stringify({ merchant: "Spar", date: "2026-10-01", total: 459, currency: "HUF", items: [item], suggestedCategoryId: null, confidence: 0.9 });
+    const app = await testApp({ ai: canned(answer) });
+    const r = await app.inject({ method: "POST", url: "/api/receipts/scan", ...multipart("a.jpg", "image/jpeg", FAKE_JPEG) });
+    expect(r.statusCode).toBe(200);
+    expect(r.json().items).toMatchObject([{ name: "Tej", product: null, brand: null, packSize: null, packUnit: "l" }]);
+    await app.close();
+  });
+
   it("accepts fenced JSON, maps 'Ft' to HUF and drops unknown category ids", async () => {
     const answer = "```json\n" + JSON.stringify({ merchant: "Lidl", date: "2026-10-01", total: 990, currency: "Ft", items: [{ name: "Kenyér", unitPrice: 990, total: 990 }], suggestedCategoryId: "made-up", confidence: 0.5 }) + "\n```";
     const app = await testApp({ ai: canned(answer) });

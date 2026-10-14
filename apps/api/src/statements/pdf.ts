@@ -28,9 +28,10 @@ const schema = z.object({
   currency: z.string().regex(/^[A-Za-z]{3}$/).nullable(),
   transactions: z.array(
     z.object({
-      date: z.string().regex(/^\d{4}-\d{2}-\d{2}/),
-      amount: z.number().finite(),
-      currency: z.string().regex(/^[A-Za-z]{3}$/).nullable().optional(),
+      // null is what the prompt asks for when a value cannot be read; that row is reported, the rest still import.
+      date: z.string().nullable(),
+      amount: z.number().finite().nullable(),
+      currency: z.string().nullable().optional(),
       counterparty: z.string().nullable().optional(),
       description: z.string().nullable().optional(),
     }),
@@ -44,17 +45,25 @@ export async function parsePdfStatement(ai: AIProvider, pdf: Buffer, defaultCurr
   const seen = new Map<string, number>();
   const res: FormatResult = { currency: r.currency?.toUpperCase() ?? null, transactions: [], ignored: 0, errors: [] };
   r.transactions.forEach((t, i) => {
+    if (t.date == null || t.amount == null) {
+      res.errors.push(`Transaction ${i + 1}: unreadable ${t.date == null ? "date" : "amount"}`);
+      return;
+    }
     if (t.amount === 0) {
       res.ignored++;
       return;
     }
     try {
       const currency = (t.currency ?? r.currency ?? defaultCurrency).toUpperCase();
+      if (!/^[A-Z]{3}$/.test(currency)) throw new Error(`invalid currency "${currency}"`);
       const counterparty = t.counterparty?.trim() ?? "";
       const description = t.description?.trim() ?? "";
+      if (!/^\d{4}-\d{2}-\d{2}/.test(t.date)) throw new Error(`invalid date "${t.date}"`);
       const date = parseStatementDate(t.date.slice(0, 10), "ymd", timeZone);
       const tx: StatementTx = {
-        externalId: rowExternalId([date, t.amount.toFixed(2), currency, counterparty, description], seen),
+        // Only what the model reads unambiguously: its wording of the counterparty and the text varies between runs,
+        // and a re-import must find the same ids. The occurrence suffix separates same-day, same-amount rows.
+        externalId: rowExternalId(["pdf", date, t.amount.toFixed(2), currency], seen),
         date,
         amount: Math.round(t.amount * 100) / 100,
         currency,

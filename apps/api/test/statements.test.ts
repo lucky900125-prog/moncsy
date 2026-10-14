@@ -1,6 +1,6 @@
 import ExcelJS from "exceljs";
 import { describe, expect, it } from "vitest";
-import { MockProvider } from "../src/ai/index.js";
+import { MockProvider, type AIProvider } from "../src/ai/index.js";
 import { decodeText, detectDelimiter, parseStatementFile } from "../src/statements/index.js";
 import { detectMapping, parseTabular } from "../src/statements/tabular.js";
 import { detectDateOrder, detectDecimal, parseAmount, parseStatementDate } from "../src/statements/values.js";
@@ -30,6 +30,13 @@ describe("statement values", () => {
     expect(detectDecimal(["12.50", "3.99"])).toBe(".");
     expect(detectDecimal(["1,234.00", "5.00"])).toBe(".");
     expect(detectDecimal(["-4 785,00", "120"])).toBe(",");
+  });
+
+  it("reads a yyyymmdd number as a date, not as an Excel serial", () => {
+    expect(parseStatementDate(20261014, "dmy", TZ)).toBe("2026-10-14T10:00:00.000Z");
+    expect(parseStatementDate(46309, "dmy", TZ)).toBe("2026-10-14T10:00:00.000Z");
+    expect(() => parseStatementDate(3_000_000, "dmy", TZ)).toThrow(/invalid date/);
+    expect(() => parseStatementDate(0, "dmy", TZ)).toThrow(/invalid date/);
   });
 
   it("reads dates year-first, day-first and month-first, as local time", () => {
@@ -123,6 +130,46 @@ describe("tabular statements", () => {
     expect((await parse("szept.csv", `${head}2026.09.02.;-1000;Tesco;123456\n2026.09.03.;-2000;Spar;123456\n`)).transactions.map((t) => t.externalId)).toEqual(
       sep.transactions.map((t) => t.externalId),
     );
+  });
+
+  it("keeps the first row of a file without a header once its columns are chosen by hand", async () => {
+    const csv = "2026.10.01;-12000;Tesco\n2026.10.02;-500;BKK\n";
+    const offered = await parse("kivonat.csv", csv);
+    expect(offered.columns).toEqual(["2026.10.01", "-12000", "Tesco"]);
+    expect(offered.transactions).toEqual([]);
+    const mapped = await parse("kivonat.csv", csv, { mapping: { date: "2026.10.01", amount: "-12000", counterparty: "Tesco" } });
+    expect(mapped.errors).toEqual([]);
+    expect(mapped.transactions.map((t) => [t.merchant, t.amount])).toEqual([
+      ["Tesco", -12000],
+      ["BKK", -500],
+    ]);
+  });
+
+  it("reads a long header cell with an unclosed parenthesis in linear time", () => {
+    const cell = `Összeg ${"(".repeat(100_000)}`;
+    const started = performance.now();
+    expect(detectMapping(["Dátum", cell, "Partner"])).toMatchObject({ date: "Dátum", amount: cell });
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  it("reports a direction it does not know when the amounts carry no sign", async () => {
+    const unsigned = await parse("k.csv", "Dátum;Összeg;Irány;Partner\n2026.10.01;100;OUT;Tesco\n2026.10.02;50;IN;Bér\n2026.10.03;70;X;Rejtély\n");
+    expect(unsigned.mapping).toMatchObject({ direction: "Irány" });
+    expect(unsigned.transactions.map((t) => [t.merchant, t.amount])).toEqual([
+      ["Tesco", -100],
+      ["Bér", 50],
+    ]);
+    expect(unsigned.errors).toEqual([expect.stringMatching(/^Row 4: unknown direction "X"/)]);
+    // With signed amounts the column only describes the transaction, and any value is fine.
+    const signed = await parse("k.csv", "Dátum;Összeg;Irány;Partner\n2026.10.01;-100;Kártya;Tesco\n2026.10.02;50;Utalás;Bér\n");
+    expect(signed.errors).toEqual([]);
+    expect(signed.transactions.map((t) => t.amount)).toEqual([-100, 50]);
+  });
+
+  it("reads tab-separated text named .xls as text", async () => {
+    const r = await parse("export.xls", "Dátum\tÖsszeg\tPartner\n2026.10.14\t-1500\tBKK\n");
+    expect(r.format).toBe("csv");
+    expect(r.transactions).toMatchObject([{ merchant: "BKK", amount: -1500 }]);
   });
 
   it("reads separate debit and credit columns and a direction column", () => {
@@ -261,6 +308,37 @@ DATA:OFXSGML
     ]);
   });
 
+  it("gives each statement of a multi-account OFX its own currency, and honours a date's offset", async () => {
+    const ofx = `OFXHEADER:100
+DATA:OFXSGML
+
+<OFX><BANKMSGSRSV1>
+<STMTTRNRS><STMTRS><CURDEF>HUF<BANKTRANLIST>
+<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20261003233000[0:GMT]<TRNAMT>-4785<FITID>H1<NAME>Spar
+</BANKTRANLIST></STMTRS></STMTTRNRS>
+<STMTTRNRS><STMTRS><CURDEF>EUR<BANKTRANLIST>
+<STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20261003183000.000[-5:EST]<TRNAMT>-12.50<FITID>E1<NAME>Lidl
+</BANKTRANLIST></STMTRS></STMTTRNRS>
+</BANKMSGSRSV1></OFX>`;
+    const r = await parse("bank.ofx", ofx);
+    expect(r.errors).toEqual([]);
+    expect(r.transactions).toMatchObject([
+      { merchant: "Spar", currency: "HUF", date: "2026-10-03T23:30:00.000Z" },
+      { merchant: "Lidl", currency: "EUR", date: "2026-10-03T23:30:00.000Z" },
+    ]);
+  });
+
+  it("reads a CAMT booking time with an offset as that instant", async () => {
+    const xml = `<?xml version="1.0"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.053.001.02"><BkToCstmrStmt><Stmt><Acct><Ccy>HUF</Ccy></Acct>
+<Ntry><Amt Ccy="HUF">100</Amt><CdtDbtInd>DBIT</CdtDbtInd><Sts>BOOK</Sts><BookgDt><DtTm>2026-10-31T23:30:00Z</DtTm></BookgDt></Ntry>
+<Ntry><Amt Ccy="HUF">200</Amt><CdtDbtInd>DBIT</CdtDbtInd><Sts>BOOK</Sts><BookgDt><DtTm>2026-10-31T23:30:00</DtTm></BookgDt></Ntry>
+</Stmt></BkToCstmrStmt></Document>`;
+    const r = await parse("camt.xml", xml);
+    expect(r.errors).toEqual([]);
+    expect(r.transactions.map((t) => t.date)).toEqual(["2026-10-31T23:30:00.000Z", "2026-10-31T22:30:00.000Z"]);
+  });
+
   it("reads MT940 with :86: details", async () => {
     const mt = `:20:STMT
 :25:11773016/1111101800000000
@@ -279,6 +357,32 @@ DATA:OFXSGML
       { amount: -4785, currency: "HUF", merchant: "SPAR 1234 BUDAPEST KARTYAS VASARLAS", categoryId: "groceries" },
       { amount: 685000, merchant: "PELDA KFT", note: "MUNKABER PELDA KFT" },
     ]);
+  });
+
+  it("reads MT940 whole amounts written with a bare decimal comma", async () => {
+    const mt = ":20:STMT\n:25:HU/1\n:28C:1/1\n:60F:C261001HUF100000,00\n:61:2610021002D12000,NTRFNONREF//B1\n:86:MOL\n:62F:C261002HUF88000,00\n";
+    const r = await parse("k.sta", mt);
+    expect(r.errors).toEqual([]);
+    expect(r.transactions).toMatchObject([{ amount: -12000, currency: "HUF" }]);
+  });
+
+  it("reports an unreadable PDF row and keeps the rest, with ids that do not depend on the model's wording", async () => {
+    const answer = (description: string) =>
+      JSON.stringify({
+        currency: "HUF",
+        transactions: [
+          { date: "2026-10-02", amount: -4785, counterparty: "SPAR", description },
+          { date: null, amount: -100, counterparty: null, description: "olvashatatlan" },
+          { date: "2026-10-03", amount: null, counterparty: "BKK", description: null },
+        ],
+      });
+    const stub = (text: string): AIProvider => ({ name: "stub", model: "stub-1", complete: async () => text, vision: async () => text });
+    const pdf = Buffer.concat([Buffer.from("%PDF-1.7\n"), Buffer.alloc(32)]);
+    const first = await parseStatementFile({ filename: "k.pdf", data: pdf }, opts, stub(answer("Kártyás vásárlás")));
+    expect(first.transactions).toHaveLength(1);
+    expect(first.errors).toEqual(["Transaction 2: unreadable date", "Transaction 3: unreadable amount"]);
+    const again = await parseStatementFile({ filename: "k.pdf", data: pdf }, opts, stub(answer("Kartyas vasarlas 1234")));
+    expect(again.transactions[0]!.externalId).toBe(first.transactions[0]!.externalId);
   });
 
   it("reads a PDF statement through the AI provider", async () => {

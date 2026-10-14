@@ -27,10 +27,13 @@ const modelReceiptSchema = z.object({
         quantity: num.default(1),
         unitPrice: num,
         total: num,
-        product: z.string().trim().min(1).nullable().default(null).transform((s) => s?.toLocaleLowerCase("hu") ?? null),
-        brand: z.string().trim().min(1).nullable().default(null),
-        packSize: num.positive().nullable().default(null),
-        packUnit: z.enum(["g", "kg", "ml", "l", "db"]).nullable().default(null),
+        // The product fields only enrich a line: a value the model got wrong becomes null instead of failing the scan.
+        product: z.string().trim().min(1).nullable().catch(null).transform((s) => s?.toLocaleLowerCase("hu") ?? null),
+        brand: z.string().trim().min(1).nullable().catch(null),
+        packSize: num.positive().nullable().catch(null),
+        packUnit: z
+          .preprocess((v) => (typeof v === "string" ? v.trim().toLowerCase() : v), z.enum(["g", "kg", "ml", "l", "db"]).nullable())
+          .catch(null),
       }),
     )
     .default([]),

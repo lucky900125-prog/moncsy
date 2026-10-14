@@ -108,7 +108,8 @@ export function parseStatementDate(v: unknown, order: DateOrder, timeZone: strin
   let h = 12;
   let mi = 0;
   let s = 0;
-  if (v instanceof Date || typeof v === "number") {
+  // Excel serials end at 2958465 (9999-12-31); a larger number is a yyyymmdd date typed into a General cell.
+  if (v instanceof Date || (typeof v === "number" && v > 0 && v < 2958466)) {
     // Excel keeps wall-clock time encoded as UTC.
     const dt = v instanceof Date ? v : fromExcelSerial(v);
     if (Number.isNaN(dt.getTime())) throw new Error(`invalid date "${String(v)}"`);
