@@ -1,0 +1,126 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Calm, low-contrast-glare palette: warm paper background, muted sage primary. */
+:root {
+  --radius: 0.9rem;
+  --background: oklch(0.975 0.006 95);
+  --foreground: oklch(0.24 0.012 250);
+  --card: oklch(0.995 0.003 95);
+  --card-foreground: var(--foreground);
+  --popover: var(--card);
+  --popover-foreground: var(--foreground);
+  --primary: oklch(0.44 0.05 155);
+  --primary-foreground: oklch(0.98 0.005 95);
+  --secondary: oklch(0.94 0.01 95);
+  --secondary-foreground: var(--foreground);
+  --muted: oklch(0.945 0.008 95);
+  --muted-foreground: oklch(0.52 0.012 250);
+  --accent: oklch(0.93 0.018 155);
+  --accent-foreground: oklch(0.3 0.04 155);
+  --destructive: oklch(0.58 0.13 25);
+  --positive: oklch(0.55 0.09 155);
+  --border: oklch(0.905 0.008 95);
+  --input: oklch(0.89 0.008 95);
+  --ring: oklch(0.6 0.05 155);
+  --sidebar: oklch(0.96 0.007 95);
+}
+
+.dark {
+  --background: oklch(0.19 0.006 260);
+  --foreground: oklch(0.92 0.006 95);
+  --card: oklch(0.225 0.007 260);
+  --card-foreground: var(--foreground);
+  --popover: oklch(0.24 0.007 260);
+  --popover-foreground: var(--foreground);
+  --primary: oklch(0.74 0.06 155);
+  --primary-foreground: oklch(0.2 0.02 155);
+  --secondary: oklch(0.27 0.007 260);
+  --secondary-foreground: var(--foreground);
+  --muted: oklch(0.26 0.007 260);
+  --muted-foreground: oklch(0.68 0.01 260);
+  --accent: oklch(0.3 0.025 155);
+  --accent-foreground: oklch(0.88 0.04 155);
+  --destructive: oklch(0.68 0.12 25);
+  --positive: oklch(0.74 0.09 155);
+  --border: oklch(0.3 0.007 260);
+  --input: oklch(0.33 0.007 260);
+  --ring: oklch(0.6 0.05 155);
+  --sidebar: oklch(0.205 0.006 260);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-positive: var(--positive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --radius-sm: calc(var(--radius) - 6px);
+  --radius-md: calc(var(--radius) - 3px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --ease-calm: cubic-bezier(0.22, 1, 0.36, 1);
+  --animate-fade-in: fade-in 320ms var(--ease-calm) both;
+  --animate-rise-in: rise-in 360ms var(--ease-calm) both;
+  @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes rise-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+}
+
+@layer base {
+  * { @apply border-border; }
+  html { -webkit-tap-highlight-color: transparent; }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv11", "ss01", "tnum";
+  }
+  /* Theme changes cross-fade colors instead of snapping (class set only while switching). */
+  html.theme-transition, html.theme-transition * {
+    transition-property: background-color, border-color, color, fill, stroke;
+    transition-duration: 240ms;
+    transition-timing-function: var(--ease-calm);
+  }
+  :focus-visible { @apply outline-none ring-2 ring-ring/50 ring-offset-2 ring-offset-background; }
+}
+
+/* Radix overlay/content enter-exit: soft fades only, no hard pops. */
+[data-state="open"].overlay { animation: fade-in 260ms var(--ease-calm) both; }
+[data-state="closed"].overlay { animation: fade-in 200ms var(--ease-calm) reverse both; }
+[data-state="open"].sheet-content { animation: sheet-in 340ms var(--ease-calm) both; }
+[data-state="closed"].sheet-content { animation: sheet-in 220ms var(--ease-calm) reverse both; }
+[data-state="open"].pop-content { animation: pop-in 200ms var(--ease-calm) both; }
+[data-state="closed"].pop-content { animation: pop-in 150ms var(--ease-calm) reverse both; }
+@keyframes sheet-in { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+@keyframes pop-in { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
+  }
+}
+
+.scrollbar-none { scrollbar-width: none; }
+.scrollbar-none::-webkit-scrollbar { display: none; }
+.pb-safe { padding-bottom: env(safe-area-inset-bottom); }
+
+@keyframes scan {
+  0%, 100% { top: 4%; }
+  50% { top: 80%; }
+}
