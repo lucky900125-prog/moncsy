@@ -4,20 +4,19 @@ import {
   Dumbbell, Smartphone, CircleEllipsis, Wrench, Briefcase, Landmark, Sparkles, BookOpen, Beer, Circle, Train, ShoppingBag,
   type LucideIcon,
 } from "lucide-react";
+import { CATEGORY_ICON_NAMES, resolveCategoryIcon, type CategoryIconName } from "@et/shared";
 
-/** Curated icon set for categories; keys are lucide kebab-case names (stored in Category.icon). */
-export const CATEGORY_ICONS: Record<string, LucideIcon> = {
+/** Every CATEGORY_ICON_NAMES entry must have a component here; the Record type makes a missing one a compile error. */
+const ICONS: Record<CategoryIconName, LucideIcon> = {
   "shopping-cart": ShoppingCart,
   "shopping-bag": ShoppingBag,
   "utensils-crossed": UtensilsCrossed,
-  utensils: UtensilsCrossed,
   coffee: Coffee,
   bus: Bus,
   train: Train,
   car: Car,
   fuel: Fuel,
   home: Home,
-  house: Home,
   zap: Zap,
   wifi: Wifi,
   film: Film,
@@ -45,10 +44,11 @@ export const CATEGORY_ICONS: Record<string, LucideIcon> = {
   "circle-ellipsis": CircleEllipsis,
 };
 
-export const PICKABLE_ICONS = Object.keys(CATEGORY_ICONS).filter((k) => !["utensils", "house"].includes(k));
+export const PICKABLE_ICONS: readonly string[] = CATEGORY_ICON_NAMES;
 
 export function CategoryIcon({ name, className }: { name: string; className?: string }) {
-  const Icon = CATEGORY_ICONS[name] ?? Circle;
+  const resolved = resolveCategoryIcon(name);
+  const Icon = resolved ? ICONS[resolved] : Circle;
   return <Icon className={className} />;
 }
 
