@@ -13,22 +13,32 @@ import type { DB } from "../src/db.js";
 import type { RevolutProvider } from "../src/revolut/types.js";
 import { testApp } from "./helpers.js";
 
-/** Just enough of the GitHub contents API for one file, in a repository the token can see unless repoHidden. */
+/**
+ * Just enough of the GitHub contents and commits API for one file, in a repository the token can see unless repoHidden.
+ * commits holds the messages of the commits that touched the file, oldest first.
+ */
 function fakeGithub(opts: { failReads?: number; repoHidden?: boolean } = {}) {
-  const state = { content: null as Buffer | null, sha: null as string | null, puts: 0, failReads: opts.failReads ?? 0 };
+  const state = { content: null as Buffer | null, sha: null as string | null, puts: 0, failReads: opts.failReads ?? 0, commits: [] as string[] };
   const fetchImpl = (async (url: string, init?: RequestInit) => {
     const headers = (init?.headers ?? {}) as Record<string, string>;
     expect(headers.authorization).toBe("Bearer gh-token");
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+    if (url === "https://api.github.com/repos/me/moncsy-data/commits?path=moncsy.db.enc&per_page=100") {
+      // GitHub answers 409 for a repository with no commits.
+      if (!state.commits.length) return new Response("Git Repository is empty.", { status: 409 });
+      return Response.json(state.commits.map((message) => ({ commit: { message } })).reverse());
+    }
     if (url === "https://api.github.com/repos/me/moncsy-data") {
       // GitHub answers 404, not 403, for a private repository the token has no access to.
       return opts.repoHidden ? new Response("Not Found", { status: 404 }) : Response.json({ full_name: "me/moncsy-data", private: true });
     }
     expect(url).toBe("https://api.github.com/repos/me/moncsy-data/contents/moncsy.db.enc");
     if (init?.method === "PUT") {
-      const body = JSON.parse(String(init.body)) as { content: string; sha?: string };
+      const body = JSON.parse(String(init.body)) as { content: string; sha?: string; message: string };
       if (state.sha && body.sha !== state.sha) return new Response("sha mismatch", { status: 409 });
       state.content = Buffer.from(body.content, "base64");
       state.sha = `sha${++state.puts}`;
+      state.commits.push(body.message);
       return Response.json({ content: { sha: state.sha } }, { status: 201 });
     }
     if (state.failReads > 0) {
@@ -175,16 +185,19 @@ describe("backup and restore through the API", () => {
     // (stale sha), and the retry stops instead of overwriting the copy that was put back.
     gh.state.content = generation1;
     gh.state.sha = "manual";
+    gh.state.commits.push("Add files via upload");
     await newApp.inject({ method: "POST", url: "/api/categories", payload: { name: "Még egy", icon: "x", color: "#123456" } });
     await newApp.deps.backup!.flush();
     expect(newApp.deps.backup!.getStatus()).toMatchObject({ stopped: false, lastError: expect.stringMatching(/GitHub 409/) });
     await newApp.deps.backup!.flush();
     expect(newApp.deps.backup!.getStatus()).toMatchObject({
       stopped: true,
-      lastError: expect.stringMatching(/holds generation 1, but this database came from generation 2/),
+      lastError: expect.stringMatching(/holds generation 1, older than generation 2 this database came from: the copy was rolled back.*do not restart yet/),
     });
     await newApp.close();
     expect(gh.state.content).toBe(generation1);
+    // A restart would load the older copy, so it is refused too.
+    await expect(restoreIfMissing(tempDb(), cfg)).rejects.toThrow(/holds generation 1, but generation 2 was written later: the copy was rolled back/);
   });
 
   it("does not overwrite a remote copy that this database was not restored from", async () => {
@@ -221,6 +234,33 @@ describe("backup and restore through the API", () => {
     // A path that already has a database is left alone.
     expect(existsSync(dbPath)).toBe(true);
     expect(await restoreIfMissing(dbPath, cfg)).toMatch(/exists; not restoring/);
+  });
+
+  it("does not start empty when the backup file was deleted, unless told to", async () => {
+    const gh = fakeGithub();
+    vi.stubGlobal("fetch", gh.fetchImpl);
+    const first = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath: tempDb() } });
+    await first.inject({ method: "POST", url: "/api/categories", payload: { name: "Eredeti", icon: "x", color: "#123456" } });
+    await first.close();
+    expect(gh.state.commits).toEqual([expect.stringMatching(/^backup 1 /)]);
+
+    // Someone deletes the file in the repository; its history is still there.
+    gh.state.content = null;
+    gh.state.sha = null;
+    gh.state.commits.push("Delete moncsy.db.enc");
+    await expect(restoreIfMissing(tempDb(), cfg)).rejects.toThrow(/is gone, but its history has 2 commit\(s\), up to backup generation 1\. Not starting/);
+
+    // The owner really wants to start over: the new copies continue above the old generations.
+    const dbPath = tempDb();
+    expect(await restoreIfMissing(dbPath, { ...cfg, allowReset: true })).toMatch(/BACKUP_ALLOW_RESET=1, starting with an empty database/);
+    const fresh = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath } });
+    await fresh.inject({ method: "POST", url: "/api/categories", payload: { name: "Új kezdet", icon: "x", color: "#123456" } });
+    await fresh.close();
+    expect(decryptBlob(gh.state.content!, key).generation).toBe(2);
+    expect(await restoreIfMissing(tempDb(), cfg)).toMatch(/^restored .* generation 2 /);
+    expect(() => loadBackupConfig({ BACKUP_GITHUB_REPO: "me/x", BACKUP_GITHUB_TOKEN: "t", BACKUP_KEY: key.toString("base64"), BACKUP_ALLOW_RESET: "yes" })).toThrow(
+      /Invalid BACKUP_ALLOW_RESET "yes"/,
+    );
   });
 
   it("reports a failed upload in /health and retries", async () => {

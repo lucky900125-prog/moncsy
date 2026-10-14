@@ -38,7 +38,12 @@ export interface BackupConfig {
   key: Buffer;
   /** wait this long after the last write before uploading */
   debounceMs: number;
+  /** start even though the backup file is gone or older than its history says (BACKUP_ALLOW_RESET=1) */
+  allowReset?: boolean;
 }
+
+/** Every GitHub call gives up after this long, so a hanging connection cannot hold a backup or a start forever. */
+const GITHUB_TIMEOUT_MS = 60_000;
 
 export type { BackupStatus };
 
@@ -74,7 +79,9 @@ export function loadBackupConfig(env: NodeJS.ProcessEnv = process.env): BackupCo
   }
   const debounceMs = Number(env.BACKUP_DEBOUNCE_MS?.trim() || 10_000);
   if (!Number.isInteger(debounceMs) || debounceMs < 0) throw new Error(`Invalid BACKUP_DEBOUNCE_MS "${env.BACKUP_DEBOUNCE_MS}" (expected milliseconds)`);
-  return { repo: repo!, token: token!, key, path: env.BACKUP_GITHUB_PATH?.trim() || "moncsy.db.enc", debounceMs };
+  const allowReset = env.BACKUP_ALLOW_RESET?.trim();
+  if (allowReset && allowReset !== "1") throw new Error(`Invalid BACKUP_ALLOW_RESET "${allowReset}" (expected 1, or leave it unset)`);
+  return { repo: repo!, token: token!, key, path: env.BACKUP_GITHUB_PATH?.trim() || "moncsy.db.enc", debounceMs, allowReset: allowReset === "1" };
 }
 
 function header(generation: number): Buffer {
@@ -140,6 +147,10 @@ export class GithubStore {
     return `${this.repoUrl()}/contents/${this.cfg.path.split("/").map(encodeURIComponent).join("/")}`;
   }
 
+  private call(url: string, init: RequestInit): Promise<Response> {
+    return this.fetchImpl(url, { ...init, signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS) });
+  }
+
   private headers(accept: string) {
     return {
       authorization: `Bearer ${this.cfg.token}`,
@@ -152,10 +163,10 @@ export class GithubStore {
   /** null when the file does not exist yet; throws for every other failure, so a fresh start never hides a lost copy. */
   async download(): Promise<Buffer | null> {
     // Files over 1 MB get metadata only through the "object" (or "raw") media type (docs.github.com/en/rest/repos/contents).
-    const meta = await this.fetchImpl(this.url(), { headers: this.headers("application/vnd.github.object+json") });
+    const meta = await this.call(this.url(), { headers: this.headers("application/vnd.github.object+json") });
     if (meta.status === 404) {
       // GitHub also answers 404 for a private repository the token cannot see; only a readable repository makes it "no file yet".
-      const repo = await this.fetchImpl(this.repoUrl(), { headers: this.headers("application/vnd.github+json") });
+      const repo = await this.call(this.repoUrl(), { headers: this.headers("application/vnd.github+json") });
       if (!repo.ok) {
         throw new Error(`GitHub ${repo.status}: repository ${this.cfg.repo} not found, or BACKUP_GITHUB_TOKEN cannot read it`);
       }
@@ -165,7 +176,7 @@ export class GithubStore {
     }
     if (!meta.ok) throw new Error(`GitHub ${meta.status} reading ${this.cfg.repo}/${this.cfg.path}: ${(await meta.text()).slice(0, 200)}`);
     const sha = ((await meta.json()) as { sha: string }).sha;
-    const raw = await this.fetchImpl(this.url(), { headers: this.headers("application/vnd.github.raw+json") });
+    const raw = await this.call(this.url(), { headers: this.headers("application/vnd.github.raw+json") });
     if (!raw.ok) throw new Error(`GitHub ${raw.status} downloading ${this.cfg.repo}/${this.cfg.path}`);
     const blob = Buffer.from(await raw.arrayBuffer());
     this.sha = sha;
@@ -173,12 +184,28 @@ export class GithubStore {
     return blob;
   }
 
+  /**
+   * How many commits touched the file, and the highest generation their messages name. Every upload is a commit
+   * "backup <generation> <time>", so a file that is gone or older than this was deleted or rolled back.
+   */
+  async history(): Promise<{ commits: number; maxGeneration: number | null }> {
+    const res = await this.call(`${this.repoUrl()}/commits?path=${encodeURIComponent(this.cfg.path)}&per_page=100`, {
+      headers: this.headers("application/vnd.github+json"),
+    });
+    // A repository without any commit, the state a new backup repository starts in, answers 409.
+    if (res.status === 409) return { commits: 0, maxGeneration: null };
+    if (!res.ok) throw new Error(`GitHub ${res.status} reading the history of ${this.cfg.repo}/${this.cfg.path}`);
+    const list = (await res.json()) as { commit: { message: string } }[];
+    const generations = list.map((c) => /^backup (\d+) /.exec(c.commit.message)?.[1]).filter((g) => g !== undefined).map(Number);
+    return { commits: list.length, maxGeneration: generations.length ? Math.max(...generations) : null };
+  }
+
   /** Writes over exactly the version last downloaded or uploaded; anything newer makes it throw RemoteChangedError. */
   async upload(blob: Buffer, message: string): Promise<void> {
     if (!this.known) throw new Error("upload() before download(): the remote version is not known");
     // Until GitHub confirms, the write may or may not have landed (a lost response is the hard case).
     this.known = false;
-    const res = await this.fetchImpl(this.url(), {
+    const res = await this.call(this.url(), {
       method: "PUT",
       headers: { ...this.headers("application/vnd.github+json"), "content-type": "application/json" },
       body: JSON.stringify({ message, content: blob.toString("base64"), ...(this.sha ? { sha: this.sha } : {}) }),
@@ -203,8 +230,26 @@ export async function restoreIfMissing(dbPath: string, cfg: BackupConfig, store 
   if (dbPath === ":memory:") throw new Error("Backup cannot be used with DB_PATH=:memory:");
   if (existsSync(dbPath)) return `local database ${dbPath} exists; not restoring`;
   const blob = await store.download();
-  if (!blob) return `no backup at ${cfg.repo}/${cfg.path} yet; starting with an empty database`;
+  const history = await store.history();
+  const reset = "or set BACKUP_ALLOW_RESET=1 for one start to accept it, and remove it again afterwards.";
+  if (!blob) {
+    if (history.commits === 0) return `no backup at ${cfg.repo}/${cfg.path} yet; starting with an empty database`;
+    const last = history.maxGeneration === null ? "" : `, up to backup generation ${history.maxGeneration}`;
+    if (!cfg.allowReset) {
+      throw new Error(
+        `${cfg.repo}/${cfg.path} is gone, but its history has ${history.commits} commit(s)${last}. Not starting with an empty database: ` +
+          `restore the file from the repository history, ${reset}`,
+      );
+    }
+    return `${cfg.repo}/${cfg.path} is gone (history has ${history.commits} commit(s)${last}); BACKUP_ALLOW_RESET=1, starting with an empty database`;
+  }
   const { data, generation } = decryptBlob(blob, cfg.key);
+  if (history.maxGeneration !== null && history.maxGeneration > generation && !cfg.allowReset) {
+    throw new Error(
+      `${cfg.repo}/${cfg.path} holds generation ${generation}, but generation ${history.maxGeneration} was written later: the copy was ` +
+        `rolled back. Not starting from it: restore generation ${history.maxGeneration} from the repository history, ${reset}`,
+    );
+  }
   mkdirSync(dirname(dbPath), { recursive: true });
   // Journal files left by an earlier database at this path would be replayed over the restored copy.
   for (const suffix of ["-wal", "-shm", "-journal"]) rmSync(dbPath + suffix, { force: true });
@@ -237,6 +282,8 @@ export class BackupScheduler {
   private pendingSince: number | null = null;
   /** an upload whose outcome is unknown (the request failed); if it landed, it is this instance's own copy */
   private unconfirmed: { generation: number; at: string; blob: Buffer; changes: number } | null = null;
+  /** the highest generation in the file's history; new generations go above it, also after an accepted reset */
+  private historyMax = 0;
   private closed = false;
   private status: BackupStatus = { enabled: true, lastBackupAt: null, generation: null, lastError: null, pending: false, stopped: false };
 
@@ -328,6 +375,7 @@ export class BackupScheduler {
   /** Before writing over a remote copy this instance has not seen, make sure it is the one this database came from. */
   private async remoteIsOurs(): Promise<boolean> {
     const blob = await this.store.download();
+    this.historyMax = (await this.store.history()).maxGeneration ?? 0;
     if (!blob) return true;
     if (this.unconfirmed && blob.equals(this.unconfirmed.blob)) {
       // The upload whose response was lost did land: it is ours, so continue from it.
@@ -355,10 +403,19 @@ export class BackupScheduler {
       );
       return false;
     }
-    if (remote !== base) {
+    if (remote > base) {
       this.stop(
         `${this.cfg.repo}/${this.cfg.path} holds generation ${remote}, but this database came from generation ${base}: ` +
-          "another instance or a manual restore wrote it. Not overwriting it; restart the service to load that copy.",
+          "another instance wrote a newer copy. Not overwriting it; restart the service to load that copy.",
+      );
+      return false;
+    }
+    if (remote < base) {
+      // A restart would not help here: the newer data exists only on this disk.
+      this.stop(
+        `${this.cfg.repo}/${this.cfg.path} holds generation ${remote}, older than generation ${base} this database came from: ` +
+          "the copy was rolled back. Not overwriting it. The newer data is only on this server's disk, so do not restart yet: " +
+          "export it first (GET /api/export), or restore the newer generation from the repository history.",
       );
       return false;
     }
@@ -383,7 +440,7 @@ export class BackupScheduler {
         this.pendingSince = null;
         return;
       }
-      const generation = (this.status.generation ?? 0) + 1;
+      const generation = Math.max(this.status.generation ?? 0, this.historyMax) + 1;
       const at = new Date().toISOString();
       // VACUUM INTO writes a consistent copy without blocking readers for long.
       await this.db.run("VACUUM INTO ?", [tmp]);
