@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { existsSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -124,13 +124,20 @@ export class GithubStore {
     private readonly fetchImpl: typeof fetch = fetch,
   ) {}
 
-  /** True after a download or an upload, until a conflict: the remote file is then the one this instance saw last. */
+  /**
+   * True after a download or a successful upload: the remote file is then the one this instance saw last.
+   * Any failed upload makes it false, since the write may or may not have landed.
+   */
   get knowsRemote(): boolean {
     return this.known;
   }
 
+  private repoUrl() {
+    return `https://api.github.com/repos/${this.cfg.repo}`;
+  }
+
   private url() {
-    return `https://api.github.com/repos/${this.cfg.repo}/contents/${this.cfg.path.split("/").map(encodeURIComponent).join("/")}`;
+    return `${this.repoUrl()}/contents/${this.cfg.path.split("/").map(encodeURIComponent).join("/")}`;
   }
 
   private headers(accept: string) {
@@ -147,6 +154,11 @@ export class GithubStore {
     // Files over 1 MB get metadata only through the "object" (or "raw") media type (docs.github.com/en/rest/repos/contents).
     const meta = await this.fetchImpl(this.url(), { headers: this.headers("application/vnd.github.object+json") });
     if (meta.status === 404) {
+      // GitHub also answers 404 for a private repository the token cannot see; only a readable repository makes it "no file yet".
+      const repo = await this.fetchImpl(this.repoUrl(), { headers: this.headers("application/vnd.github+json") });
+      if (!repo.ok) {
+        throw new Error(`GitHub ${repo.status}: repository ${this.cfg.repo} not found, or BACKUP_GITHUB_TOKEN cannot read it`);
+      }
       this.sha = null;
       this.known = true;
       return null;
@@ -164,6 +176,8 @@ export class GithubStore {
   /** Writes over exactly the version last downloaded or uploaded; anything newer makes it throw RemoteChangedError. */
   async upload(blob: Buffer, message: string): Promise<void> {
     if (!this.known) throw new Error("upload() before download(): the remote version is not known");
+    // Until GitHub confirms, the write may or may not have landed (a lost response is the hard case).
+    this.known = false;
     const res = await this.fetchImpl(this.url(), {
       method: "PUT",
       headers: { ...this.headers("application/vnd.github+json"), "content-type": "application/json" },
@@ -172,12 +186,12 @@ export class GithubStore {
     if (!res.ok) {
       const text = (await res.text()).slice(0, 200);
       if (res.status === 409 || res.status === 422) {
-        this.known = false;
         throw new RemoteChangedError(`GitHub ${res.status} writing ${this.cfg.repo}/${this.cfg.path}; the file changed since it was read: ${text}`);
       }
       throw new Error(`GitHub ${res.status} writing ${this.cfg.repo}/${this.cfg.path}: ${text}`);
     }
     this.sha = ((await res.json()) as { content: { sha: string } }).content.sha;
+    this.known = true;
   }
 }
 
@@ -192,15 +206,38 @@ export async function restoreIfMissing(dbPath: string, cfg: BackupConfig, store 
   if (!blob) return `no backup at ${cfg.repo}/${cfg.path} yet; starting with an empty database`;
   const { data, generation } = decryptBlob(blob, cfg.key);
   mkdirSync(dirname(dbPath), { recursive: true });
-  writeFileSync(dbPath, data);
+  // Journal files left by an earlier database at this path would be replayed over the restored copy.
+  for (const suffix of ["-wal", "-shm", "-journal"]) rmSync(dbPath + suffix, { force: true });
+  // Written next to it, synced and renamed, so an interrupted restore never leaves a half file that looks like a database.
+  const partial = `${dbPath}.restoring`;
+  try {
+    const fd = openSync(partial, "w");
+    try {
+      writeFileSync(fd, data);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(partial, dbPath);
+  } catch (e) {
+    rmSync(partial, { force: true });
+    throw e;
+  }
   return `restored ${dbPath} from ${cfg.repo}/${cfg.path}, generation ${generation} (${blob.length} bytes)`;
 }
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Uploads a consistent snapshot a few seconds after the database last changed, one upload at a time. */
 export class BackupScheduler {
   private timer: NodeJS.Timeout | null = null;
   private running: Promise<void> | null = null;
   private savedChanges: number | null = null;
+  /** when the oldest change not yet uploaded was announced; caps how long new writes can postpone the upload */
+  private pendingSince: number | null = null;
+  /** an upload whose outcome is unknown (the request failed); if it landed, it is this instance's own copy */
+  private unconfirmed: { generation: number; at: string; blob: Buffer; changes: number } | null = null;
+  private closed = false;
   private status: BackupStatus = { enabled: true, lastBackupAt: null, generation: null, lastError: null, pending: false, stopped: false };
 
   constructor(
@@ -216,18 +253,31 @@ export class BackupScheduler {
     this.status.generation = generation === null ? null : Number(generation);
     this.status.lastBackupAt = await getMeta(this.db, META_AT);
     // What is on disk now is either the restored copy or not worth a commit on its own (migrations, seeding).
-    this.savedChanges = (await this.db.get<{ n: number }>("SELECT total_changes() AS n"))!.n;
+    this.savedChanges = await this.totalChanges();
   }
 
   getStatus(): BackupStatus {
     return { ...this.status };
   }
 
-  /** Called after any request that may have written; uploads only when the change counter moved. */
+  private async totalChanges(db: DB = this.db): Promise<number> {
+    return (await db.get<{ n: number }>("SELECT total_changes() AS n"))!.n;
+  }
+
+  private maxWaitMs(): number {
+    return Math.max(60_000, 6 * this.cfg.debounceMs);
+  }
+
+  /** Called after an authorized request that may have written; uploads only when the change counter moved. */
   touch(): void {
-    if (this.timer) clearTimeout(this.timer);
+    if (this.closed) return;
+    const now = Date.now();
+    this.pendingSince ??= now;
     this.status.pending = true;
-    this.timer = setTimeout(() => void this.flush(), this.cfg.debounceMs);
+    // Writes keep postponing the upload, but not past maxWaitMs from the first one.
+    const wait = Math.max(0, Math.min(this.cfg.debounceMs, this.pendingSince + this.maxWaitMs() - now));
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = setTimeout(() => void this.flush(), wait);
   }
 
   async flush(): Promise<void> {
@@ -238,17 +288,65 @@ export class BackupScheduler {
     await this.running;
   }
 
+  /** Last upload before shutdown, retried a few times since nothing runs after it; then no timer fires again. */
+  async close(): Promise<void> {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await this.flush();
+      if (!this.status.pending || this.status.stopped) break;
+      if (attempt < 3) await sleep(1000 * attempt);
+    }
+    this.closed = true;
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+    if (this.status.pending) {
+      this.log.error(
+        `final backup did not complete; changes made after ${this.status.lastBackupAt ?? "the start"} exist only on this disk: ${this.status.lastError}`,
+      );
+    }
+  }
+
   private stop(reason: string): void {
     this.status.stopped = true;
     this.status.lastError = reason;
     this.log.error(`backup stopped: ${reason}`);
   }
 
+  /** Records an upload GitHub accepted, in the database and in the status. */
+  private async recordUploaded(generation: number, at: string): Promise<number> {
+    // Measured inside one transaction, so a write that lands meanwhile is not mistaken for these two.
+    const delta = await this.db.tx(async (t) => {
+      const before = await this.totalChanges(t);
+      await setMeta(t, META_GENERATION, String(generation));
+      await setMeta(t, META_AT, at);
+      return (await this.totalChanges(t)) - before;
+    });
+    this.unconfirmed = null;
+    this.status = { ...this.status, generation, lastBackupAt: at, lastError: null };
+    return delta;
+  }
+
   /** Before writing over a remote copy this instance has not seen, make sure it is the one this database came from. */
   private async remoteIsOurs(): Promise<boolean> {
     const blob = await this.store.download();
     if (!blob) return true;
-    const remote = decryptBlob(blob, this.cfg.key).generation;
+    if (this.unconfirmed && blob.equals(this.unconfirmed.blob)) {
+      // The upload whose response was lost did land: it is ours, so continue from it.
+      const { generation, at, changes } = this.unconfirmed;
+      this.savedChanges = changes + (await this.recordUploaded(generation, at));
+      this.log.info(`backup ${generation} had reached ${this.cfg.repo}/${this.cfg.path} although its request failed`);
+      return true;
+    }
+    this.unconfirmed = null;
+    let remote: number;
+    try {
+      remote = decryptBlob(blob, this.cfg.key).generation;
+    } catch (e) {
+      this.stop(
+        `${this.cfg.repo}/${this.cfg.path} cannot be read with this BACKUP_KEY (${(e as Error).message}). ` +
+          "Not overwriting it: check BACKUP_KEY, or remove the remote file if it is really not needed.",
+      );
+      return false;
+    }
     const base = this.status.generation;
     if (base === null) {
       this.stop(
@@ -268,15 +366,23 @@ export class BackupScheduler {
   }
 
   private async backup(): Promise<void> {
-    if (this.status.stopped) return;
-    const changes = (await this.db.get<{ n: number }>("SELECT total_changes() AS n"))!.n;
-    if (this.savedChanges !== null && changes === this.savedChanges) {
+    if (this.status.stopped || this.closed) return;
+    if (this.savedChanges !== null && (await this.totalChanges()) === this.savedChanges) {
       this.status.pending = false;
+      this.pendingSince = null;
       return;
     }
+    this.status.pending = true;
     const tmp = join(tmpdir(), `moncsy-snapshot-${process.pid}-${Date.now()}.db`);
     try {
       if (!this.store.knowsRemote && !(await this.remoteIsOurs())) return;
+      // Read again right before the snapshot: adopting an upload that did land may have covered everything.
+      const changes = await this.totalChanges();
+      if (changes === this.savedChanges) {
+        this.status.pending = false;
+        this.pendingSince = null;
+        return;
+      }
       const generation = (this.status.generation ?? 0) + 1;
       const at = new Date().toISOString();
       // VACUUM INTO writes a consistent copy without blocking readers for long.
@@ -291,19 +397,22 @@ export class BackupScheduler {
         snapshot.close();
       }
       const blob = encryptBlob(readFileSync(tmp), this.cfg.key, generation);
+      this.unconfirmed = { generation, at, blob, changes };
       await this.store.upload(blob, `backup ${generation} ${at}`);
-      await setMeta(this.db, META_GENERATION, String(generation));
-      await setMeta(this.db, META_AT, at);
-      // Counted after the two meta writes, so recording the backup is not itself a change to back up.
-      this.savedChanges = (await this.db.get<{ n: number }>("SELECT total_changes() AS n"))!.n;
-      this.status = { ...this.status, generation, lastBackupAt: at, lastError: null, pending: false };
+      // `changes` was read before the snapshot: a write made during the upload keeps the counter ahead of this,
+      // so it is uploaded next time instead of being taken as saved.
+      this.savedChanges = changes + (await this.recordUploaded(generation, at));
+      if ((await this.totalChanges()) === this.savedChanges) {
+        this.status.pending = false;
+        this.pendingSince = null;
+      }
       this.log.info(`backup ${generation} uploaded to ${this.cfg.repo}/${this.cfg.path} (${blob.length} bytes)`);
     } catch (e) {
       this.status.lastError = (e as Error).message;
       this.log.error(`backup failed, will retry: ${(e as Error).message}`);
-      // Retry later even if nothing else is written. After a RemoteChangedError the retry reads the remote copy
-      // again first, and stops if another instance wrote it.
-      this.timer = setTimeout(() => void this.flush(), Math.max(60_000, this.cfg.debounceMs));
+      // Retry later even if nothing else is written. A failed upload leaves the remote unknown, so the retry reads it
+      // first: it adopts an upload that did land, and stops if another instance wrote the copy.
+      if (!this.closed) this.timer = setTimeout(() => void this.flush(), Math.max(60_000, this.cfg.debounceMs));
     } finally {
       rmSync(tmp, { force: true });
     }

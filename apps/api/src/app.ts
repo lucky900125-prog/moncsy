@@ -86,12 +86,13 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
         const failures = new Map<string, { count: number; resetAt: number }>();
         const unauthorized = { error: "Missing or wrong API token (Authorization: Bearer <API_TOKEN>)" };
         api.addHook("onRequest", async (req, reply) => {
-          if (req.method === "OPTIONS" || req.routeOptions.url === "/api/health") return;
+          if (req.method === "OPTIONS") return;
           // The right token always gets through, so nobody can lock the owner out by sending wrong ones from the same
           // address (behind Render's proxy every client can share one). The limit only answers repeated wrong guesses.
           if (isAuthorized(config, req)) return;
+          const health = req.routeOptions.url === "/api/health";
           // Only a sent token is a guess; counting bare requests would only add noise.
-          if (!req.headers.authorization) return reply.status(401).send(unauthorized);
+          if (!req.headers.authorization) return health ? undefined : reply.status(401).send(unauthorized);
           const now = Date.now();
           let f = failures.get(req.ip);
           if (!f || f.resetAt <= now) {
@@ -103,14 +104,18 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
           if (f.count > AUTH_MAX_FAILURES) {
             return reply.status(429).send({ error: "Too many wrong API tokens from this address; try again later" });
           }
-          return reply.status(401).send(unauthorized);
+          // /health stays public, but it tells a right token from a wrong one, so a wrong guess there counts too.
+          return health ? undefined : reply.status(401).send(unauthorized);
         });
       }
       if (deps.backup) {
         const backup = deps.backup;
         // Anything but a read may have written; the scheduler uploads only if the database actually changed.
-        api.addHook("onResponse", async (req) => {
-          if (req.method !== "GET" && req.method !== "HEAD" && req.method !== "OPTIONS") backup.touch();
+        // A refused request wrote nothing, and letting it touch would let anyone keep postponing the backup.
+        // onSend, not onResponse: onResponse never runs when the client went away before the response, though the write stands.
+        api.addHook("onSend", async (req, _reply, payload) => {
+          if (req.method !== "GET" && req.method !== "HEAD" && req.method !== "OPTIONS" && isAuthorized(config, req)) backup.touch();
+          return payload;
         });
       }
       await coreRoutes(api, deps);
@@ -124,7 +129,7 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
   );
 
   app.addHook("onClose", async () => {
-    await deps.backup?.flush();
+    await deps.backup?.close();
     if (!opts.db) db.close();
   });
 

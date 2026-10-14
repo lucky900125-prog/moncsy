@@ -1,20 +1,28 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { request } from "node:http";
+import type { AddressInfo } from "node:net";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import { MockProvider } from "../src/ai/index.js";
-import { decryptBlob, encryptBlob, loadBackupConfig, restoreIfMissing, type BackupConfig } from "../src/backup.js";
+import { BackupScheduler, decryptBlob, encryptBlob, loadBackupConfig, restoreIfMissing, type BackupConfig } from "../src/backup.js";
 import { loadConfig } from "../src/config.js";
+import type { DB } from "../src/db.js";
+import type { RevolutProvider } from "../src/revolut/types.js";
 import { testApp } from "./helpers.js";
 
-/** Just enough of the GitHub contents API for one file. */
-function fakeGithub(opts: { failReads?: number } = {}) {
+/** Just enough of the GitHub contents API for one file, in a repository the token can see unless repoHidden. */
+function fakeGithub(opts: { failReads?: number; repoHidden?: boolean } = {}) {
   const state = { content: null as Buffer | null, sha: null as string | null, puts: 0, failReads: opts.failReads ?? 0 };
   const fetchImpl = (async (url: string, init?: RequestInit) => {
     const headers = (init?.headers ?? {}) as Record<string, string>;
     expect(headers.authorization).toBe("Bearer gh-token");
+    if (url === "https://api.github.com/repos/me/moncsy-data") {
+      // GitHub answers 404, not 403, for a private repository the token has no access to.
+      return opts.repoHidden ? new Response("Not Found", { status: 404 }) : Response.json({ full_name: "me/moncsy-data", private: true });
+    }
     expect(url).toBe("https://api.github.com/repos/me/moncsy-data/contents/moncsy.db.enc");
     if (init?.method === "PUT") {
       const body = JSON.parse(String(init.body)) as { content: string; sha?: string };
@@ -205,6 +213,10 @@ describe("backup and restore through the API", () => {
 
     gh.state.failReads = 1;
     await expect(restoreIfMissing(tempDb(), cfg)).rejects.toThrow(/GitHub 502/);
+    // A token that cannot see the repository is not the same as a repository with no backup in it yet.
+    vi.stubGlobal("fetch", fakeGithub({ repoHidden: true }).fetchImpl);
+    await expect(restoreIfMissing(tempDb(), cfg)).rejects.toThrow(/repository me\/moncsy-data not found, or BACKUP_GITHUB_TOKEN cannot read it/);
+    vi.stubGlobal("fetch", gh.fetchImpl);
     await expect(restoreIfMissing(tempDb(), { ...cfg, key: randomBytes(32) })).rejects.toThrow(/wrong BACKUP_KEY/);
     // A path that already has a database is left alone.
     expect(existsSync(dbPath)).toBe(true);
@@ -213,15 +225,193 @@ describe("backup and restore through the API", () => {
 
   it("reports a failed upload in /health and retries", async () => {
     const gh = fakeGithub();
+    let fail = true;
     const failing = (async (url: string, init?: RequestInit) =>
-      init?.method === "PUT" ? new Response("rate limited", { status: 403 }) : gh.fetchImpl(url, init)) as typeof fetch;
+      fail && init?.method === "PUT" ? new Response("rate limited", { status: 403 }) : gh.fetchImpl(url, init)) as typeof fetch;
     vi.stubGlobal("fetch", failing);
     const app = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath: tempDb() } });
     await app.inject({ method: "POST", url: "/api/categories", payload: { name: "Teszt", icon: "x", color: "#123456" } });
     await app.deps.backup!.flush();
     expect(app.deps.backup!.getStatus()).toMatchObject({ lastBackupAt: null, lastError: expect.stringMatching(/GitHub 403/) });
-    vi.stubGlobal("fetch", gh.fetchImpl);
+    fail = false;
     await app.close();
+    expect(gh.state.puts).toBe(1);
+  });
+
+  it("uploads a write made during an upload the next time, instead of taking it as saved", async () => {
+    const gh = fakeGithub();
+    let app: Awaited<ReturnType<typeof buildApp>> | null = null;
+    let wroteDuringUpload = false;
+    vi.stubGlobal("fetch", (async (url: string, init?: RequestInit) => {
+      if (init?.method === "PUT" && !wroteDuringUpload) {
+        wroteDuringUpload = true;
+        const res = await app!.inject({ method: "POST", url: "/api/categories", payload: { name: "Közben", icon: "x", color: "#123456" } });
+        expect(res.statusCode).toBe(201);
+      }
+      return gh.fetchImpl(url, init);
+    }) as typeof fetch);
+    // A long debounce, so only the explicit flushes below upload.
+    app = await buildApp({ ai: new MockProvider(), backup: { ...cfg, debounceMs: 60_000 }, config: { ...loadConfig({}), dbPath: tempDb() } });
+    await app.inject({ method: "POST", url: "/api/categories", payload: { name: "Előtte", icon: "x", color: "#123456" } });
+    await app.deps.backup!.flush();
+    expect(gh.state.puts).toBe(1);
+    expect(decryptBlob(gh.state.content!, key).data.includes(Buffer.from("Közben"))).toBe(false);
+    expect(app.deps.backup!.getStatus()).toMatchObject({ generation: 1, pending: true });
+    await app.deps.backup!.flush();
+    expect(gh.state.puts).toBe(2);
+    expect(decryptBlob(gh.state.content!, key).data.includes(Buffer.from("Közben"))).toBe(true);
+    expect(app.deps.backup!.getStatus()).toMatchObject({ generation: 2, pending: false });
+    await app.close();
+    expect(gh.state.puts).toBe(2);
+  });
+
+  it("stops instead of overwriting a remote copy it cannot decrypt", async () => {
+    const gh = fakeGithub();
+    vi.stubGlobal("fetch", gh.fetchImpl);
+    // A copy made with another key, e.g. after BACKUP_KEY was changed by mistake.
+    const other = await buildApp({ ai: new MockProvider(), backup: { ...cfg, key: randomBytes(32) }, config: { ...loadConfig({}), dbPath: tempDb() } });
+    await other.inject({ method: "POST", url: "/api/categories", payload: { name: "Másik kulcs", icon: "x", color: "#123456" } });
+    await other.close();
+    const theirs = gh.state.content;
+    expect(gh.state.puts).toBe(1);
+
+    const app = await buildApp({ ai: new MockProvider(), backup: { ...cfg, debounceMs: 60_000 }, config: { ...loadConfig({}), dbPath: tempDb() } });
+    await app.inject({ method: "POST", url: "/api/categories", payload: { name: "Teszt", icon: "x", color: "#123456" } });
+    await app.deps.backup!.flush();
+    await app.deps.backup!.flush();
+    expect(app.deps.backup!.getStatus()).toMatchObject({
+      stopped: true,
+      lastError: expect.stringMatching(/cannot be read with this BACKUP_KEY .*Not overwriting it/),
+    });
+    await app.close();
+    expect(gh.state.puts).toBe(1);
+    expect(gh.state.content).toBe(theirs);
+  });
+
+  it("continues from an upload that landed although its response was lost", async () => {
+    const gh = fakeGithub();
+    let loseResponse = true;
+    vi.stubGlobal("fetch", (async (url: string, init?: RequestInit) => {
+      const res = await gh.fetchImpl(url, init);
+      if (init?.method === "PUT" && loseResponse) {
+        loseResponse = false;
+        throw new TypeError("fetch failed");
+      }
+      return res;
+    }) as typeof fetch);
+    const app = await buildApp({ ai: new MockProvider(), backup: { ...cfg, debounceMs: 60_000 }, config: { ...loadConfig({}), dbPath: tempDb() } });
+    await app.inject({ method: "POST", url: "/api/categories", payload: { name: "Teszt", icon: "x", color: "#123456" } });
+    await app.deps.backup!.flush();
+    expect(gh.state.puts).toBe(1);
+    expect(app.deps.backup!.getStatus()).toMatchObject({ generation: null, lastError: "fetch failed", pending: true });
+    // The retry finds its own copy on GitHub, records it, and has nothing more to upload.
+    await app.deps.backup!.flush();
+    expect(app.deps.backup!.getStatus()).toMatchObject({ generation: 1, lastError: null, pending: false, stopped: false });
+    expect(gh.state.puts).toBe(1);
+    await app.inject({ method: "POST", url: "/api/categories", payload: { name: "Utána", icon: "x", color: "#123456" } });
+    await app.close();
+    expect(gh.state.puts).toBe(2);
+    expect(decryptBlob(gh.state.content!, key).generation).toBe(2);
+  });
+
+  it("retries the last upload when the server shuts down, and schedules nothing after", async () => {
+    const gh = fakeGithub();
+    let failPuts = 1;
+    vi.stubGlobal("fetch", (async (url: string, init?: RequestInit) =>
+      init?.method === "PUT" && failPuts-- > 0 ? new Response("bad gateway", { status: 502 }) : gh.fetchImpl(url, init)) as typeof fetch);
+    const app = await buildApp({ ai: new MockProvider(), backup: { ...cfg, debounceMs: 60_000 }, config: { ...loadConfig({}), dbPath: tempDb() } });
+    await app.inject({ method: "POST", url: "/api/categories", payload: { name: "Teszt", icon: "x", color: "#123456" } });
+    await app.close();
+    expect(gh.state.puts).toBe(1);
+    const backup = app.deps.backup!;
+    expect(backup.getStatus()).toMatchObject({ generation: 1, lastError: null, pending: false });
+    backup.touch();
+    expect(backup.getStatus().pending).toBe(false);
+  });
+
+  it("restores into place in one step, without the journal of an earlier database", async () => {
+    const gh = fakeGithub();
+    vi.stubGlobal("fetch", gh.fetchImpl);
+    const seed = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath: tempDb() } });
+    await seed.inject({ method: "POST", url: "/api/categories", payload: { name: "Mentett", icon: "x", color: "#123456" } });
+    await seed.close();
+
+    const dbPath = tempDb();
+    mkdirSync(dirname(dbPath), { recursive: true });
+    writeFileSync(`${dbPath}-wal`, "left by an earlier database");
+    writeFileSync(`${dbPath}-shm`, "left by an earlier database");
+    expect(await restoreIfMissing(dbPath, cfg)).toMatch(/^restored /);
+    expect(existsSync(`${dbPath}-wal`)).toBe(false);
+    expect(existsSync(`${dbPath}-shm`)).toBe(false);
+    expect(existsSync(`${dbPath}.restoring`)).toBe(false);
+    const app = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath } });
+    expect((await app.inject("/api/categories")).json()).toEqual(expect.arrayContaining([expect.objectContaining({ name: "Mentett" })]));
+    await app.close();
+  });
+
+  it("starts a backup only for requests that carry the right token", async () => {
+    const gh = fakeGithub();
+    vi.stubGlobal("fetch", gh.fetchImpl);
+    const app = await buildApp({
+      ai: new MockProvider(),
+      backup: { ...cfg, debounceMs: 60_000 },
+      config: { ...loadConfig({}), dbPath: tempDb(), apiToken: "right" },
+    });
+    const payload = { name: "Teszt", icon: "x", color: "#123456" };
+    expect((await app.inject({ method: "POST", url: "/api/categories", payload })).statusCode).toBe(401);
+    expect((await app.inject({ method: "POST", url: "/api/categories", headers: { authorization: "Bearer nope" }, payload })).statusCode).toBe(401);
+    expect(app.deps.backup!.getStatus().pending).toBe(false);
+    expect((await app.inject({ method: "POST", url: "/api/categories", headers: { authorization: "Bearer right" }, payload })).statusCode).toBe(201);
+    expect(app.deps.backup!.getStatus().pending).toBe(true);
+    await app.close();
+    expect(gh.state.puts).toBe(1);
+  });
+
+  it("starts a backup for a write whose client went away before the response", async () => {
+    const gh = fakeGithub();
+    vi.stubGlobal("fetch", gh.fetchImpl);
+    let app: Awaited<ReturnType<typeof buildApp>> | null = null;
+    // A slow sync, as against a real bank API; the client gives up while it runs.
+    const revolut: RevolutProvider = {
+      mode: "business-api",
+      status: async () => ({ connected: true, mode: "business-api", lastSyncAt: null, accounts: [] }),
+      sync: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        await app!.deps.repo.createCategory({ name: "Lassú", icon: "x", color: "#123456", parentId: null });
+        return { imported: 1, skipped: 0 };
+      },
+    };
+    app = await buildApp({ ai: new MockProvider(), revolut, backup: { ...cfg, debounceMs: 60_000 }, config: { ...loadConfig({}), dbPath: tempDb() } });
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const { port } = app.server.address() as AddressInfo;
+    await new Promise<void>((resolve) => {
+      const req = request({ host: "127.0.0.1", port, method: "POST", path: "/api/revolut/sync", headers: { "content-type": "application/json" } });
+      req.on("error", () => resolve());
+      req.end("{}");
+      setTimeout(() => {
+        req.destroy();
+        resolve();
+      }, 50);
+    });
+    await vi.waitFor(() => expect(app!.deps.backup!.getStatus().pending).toBe(true), { timeout: 2_000, interval: 50 });
+    await app.close();
+    expect(decryptBlob(gh.state.content!, key).data.includes(Buffer.from("Lassú"))).toBe(true);
+  });
+
+  it("does not let a steady stream of writes postpone the upload forever", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const scheduler = new BackupScheduler({} as DB, { ...cfg, debounceMs: 5_000 }, { info() {}, error() {} });
+      const flush = vi.spyOn(scheduler, "flush").mockResolvedValue();
+      // A write every 4 seconds would keep resetting a 5-second debounce; the upload still happens a minute after the first.
+      for (let t = 0; t < 60_000; t += 4_000) {
+        scheduler.touch();
+        vi.advanceTimersByTime(4_000);
+      }
+      expect(flush).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -235,6 +425,21 @@ describe("wrong-token rate limit", () => {
     // The right token is never refused, even from the address that is over the limit.
     expect((await app.inject({ url: "/api/categories", headers: { authorization: "Bearer right" } })).statusCode).toBe(200);
     expect((await app.inject({ url: "/api/categories", headers: { authorization: "Bearer nope" } })).statusCode).toBe(429);
+    await app.close();
+  });
+
+  it("counts wrong tokens sent to /health, which stays open without one", async () => {
+    const app = await testApp({ config: { apiToken: "right" } });
+    for (let i = 0; i < 20; i++) {
+      const res = await app.inject({ url: "/api/health", headers: { authorization: "Bearer nope" } });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().ai).toBeUndefined();
+    }
+    expect((await app.inject({ url: "/api/health", headers: { authorization: "Bearer nope" } })).statusCode).toBe(429);
+    expect((await app.inject({ url: "/api/categories", headers: { authorization: "Bearer nope" } })).statusCode).toBe(429);
+    // The platform's health check sends no token, and the owner's app sends the right one.
+    expect((await app.inject({ url: "/api/health" })).statusCode).toBe(200);
+    expect((await app.inject({ url: "/api/health", headers: { authorization: "Bearer right" } })).json().ai).toBeDefined();
     await app.close();
   });
 
