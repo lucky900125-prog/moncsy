@@ -78,6 +78,14 @@ export const analyzeRequestSchema = z.object({
   to: isoDate,
   question: z.string().max(2000).optional(),
   scope: z.enum(["spending", "products"]).default("spending"),
+  products: z
+    .object({
+      q: z.string().trim().max(120).optional(),
+      brand: z.string().trim().max(120).optional(),
+      merchant: z.string().trim().max(200).optional(),
+    })
+    .strict()
+    .optional(),
 });
 
 export const productQuerySchema = z.object({

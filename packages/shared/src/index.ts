@@ -80,6 +80,17 @@ export interface AnalyzeRequest {
   question?: string;
   /** "spending" (default): categories, merchants, months. "products": receipt line items and store prices. */
   scope?: "spending" | "products";
+  /** scope "products" only: narrows the products sent to the AI. Matching ignores case and accents. */
+  products?: ProductFilter;
+}
+
+export interface ProductFilter {
+  /** part of the product name or of the receipt line, e.g. "tej" */
+  q?: string;
+  /** the brand, e.g. "Mizo" */
+  brand?: string;
+  /** only products bought at least once in this store, e.g. "Spar"; the other stores stay in for comparison */
+  merchant?: string;
 }
 
 export interface Insight {

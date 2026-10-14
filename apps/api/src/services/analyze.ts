@@ -1,9 +1,10 @@
 import { z } from "zod";
-import type { AnalyzeRequest, AnalyzeResponse, Category, Transaction } from "@et/shared";
-import { buildProductStats, rankStores, type StoreRank } from "@et/shared/products";
+import type { AnalyzeRequest, AnalyzeResponse, Category, ProductFilter, Transaction } from "@et/shared";
+import { buildProductStats, rankStores, storeName, type ProductStat, type StoreRank } from "@et/shared/products";
 import type { AIProvider } from "../ai/index.js";
 import { parseModelJson } from "../ai/json.js";
 import { round2 } from "../repository.js";
+import { fold } from "../statements/values.js";
 
 export interface Aggregate {
   from: string;
@@ -143,13 +144,25 @@ export interface ProductAggregate {
   storeRanking: StoreRank[];
   /** products left out to keep the request small */
   omitted: number;
+  /** what the user narrowed the products to, so the model answers about that and not the whole basket */
+  filter?: ProductFilter;
 }
 
 const MAX_PRODUCTS = 40;
 
+/** True when the product matches every part of the filter that is set. */
+export function matchesProductFilter(p: ProductStat, f: ProductFilter): boolean {
+  const has = (text: string | null | undefined, needle: string) => fold(text ?? "").includes(fold(needle));
+  if (f.q && !has(p.product, f.q) && !p.history.some((h) => has(h.name, f.q!))) return false;
+  if (f.brand && fold(p.brand ?? "") !== fold(f.brand)) return false;
+  if (f.merchant && !p.stores.some((s) => has(s.store, storeName(f.merchant!)))) return false;
+  return true;
+}
+
 /** Receipt line items grouped into products with their average price per store. Line-level history stays on the server. */
-export function productAggregate(txs: Transaction[], from: string, to: string): ProductAggregate {
-  const stats = buildProductStats(txs);
+export function productAggregate(txs: Transaction[], from: string, to: string, filter?: ProductFilter): ProductAggregate {
+  const active = filter && (filter.q || filter.brand || filter.merchant) ? filter : undefined;
+  const stats = buildProductStats(txs).filter((p) => !active || matchesProductFilter(p, active));
   // Products bought in several stores are the comparable ones, so they go first; then the biggest spend.
   const picked = [...stats.filter((p) => p.cheapest), ...stats.filter((p) => !p.cheapest)].slice(0, MAX_PRODUCTS);
   return {
@@ -172,6 +185,7 @@ export function productAggregate(txs: Transaction[], from: string, to: string): 
     })),
     storeRanking: rankStores(stats),
     omitted: Math.max(0, stats.length - picked.length),
+    ...(active ? { filter: active } : {}),
   };
 }
 
@@ -201,6 +215,7 @@ const PRODUCTS_SYSTEM = `You are a careful shopping analyst for a household expe
 You receive the user's receipt line items grouped into products (generic product, brand, package size) with the average
 price paid in each store. avgPrice is per kg, per l or per db when priceUnit says so, otherwise per package or piece.
 storeRanking counts, over the products bought in more than one store, how often each store was the cheapest.
+When a "filter" is present, the user narrowed the products to it: answer about those products only.
 Write in Hungarian unless the user's question is clearly in another language.
 Compare prices only within one product entry (same product, same brand when a brand is given). A product bought in a single
 store has no comparison: say so instead of calling that store cheap. Use only numbers that appear in or follow from the data.

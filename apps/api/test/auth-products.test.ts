@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Transaction } from "@et/shared";
 import { buildProductStats, rankStores, storeName } from "@et/shared/products";
 import { assertSafeExposure, loadConfig } from "../src/config.js";
+import { productAggregate } from "../src/services/analyze.js";
 import { FAKE_JPEG, multipart, testApp } from "./helpers.js";
 
 describe("API token", () => {
@@ -131,6 +132,37 @@ describe("POST /api/ai/analyze scope=products", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().summary).toMatch(/5 terméket vettél több boltban; ezek közül 5 esetben a Lidl/);
     expect(res.json().insights[0].title).toMatch(/: Lidl$/);
+    await app.close();
+  });
+
+  it("narrows the products sent to the AI by name, brand and store", async () => {
+    const line = (name: string, product: string, brand: string, unitPrice: number) => ({
+      name, quantity: 1, unitPrice, total: unitPrice, product, brand, packSize: 1, packUnit: "l" as const,
+    });
+    const txs = [
+      tx("a", "SPAR Magyarország Kft.", "2026-10-12T10:00:00.000Z", [line("MIZO TEJ 1L", "tej", "Mizo", 459), line("NATUR AQUA 1,5L", "ásványvíz", "Natur Aqua", 129)]),
+      tx("b", "Lidl", "2026-10-13T10:00:00.000Z", [line("MIZO TEJ 1L", "tej", "Mizo", 419), line("PILOS TEJ 1L", "tej", "Pilos", 289)]),
+    ];
+    const names = (f: Parameters<typeof productAggregate>[3]) => productAggregate(txs, "2026-10-01", "2026-10-31", f).products.map((p) => `${p.product}/${p.brand}`).sort();
+    expect(names(undefined)).toEqual(["Tej/Mizo", "Tej/Pilos", "Ásványvíz/Natur Aqua"].sort());
+    expect(names({ q: "TEJ" })).toEqual(["Tej/Mizo", "Tej/Pilos"]);
+    expect(names({ q: "asvanyviz" })).toEqual(["Ásványvíz/Natur Aqua"]);
+    expect(names({ brand: "mizo" })).toEqual(["Tej/Mizo"]);
+    // A store filter keeps the products bought there, with every store they were bought in.
+    expect(names({ merchant: "SPAR Magyarország Kft." })).toEqual(["Tej/Mizo", "Ásványvíz/Natur Aqua"].sort());
+    expect(productAggregate(txs, "", "", { merchant: "spar" }).products.find((p) => p.brand === "Mizo")!.stores.map((s) => s.store)).toEqual(["Lidl", "Spar"]);
+    expect(productAggregate(txs, "", "", { brand: "Mizo" }).filter).toEqual({ brand: "Mizo" });
+    expect(productAggregate(txs, "", "", { q: "" }).filter).toBeUndefined();
+
+    const app = await testApp();
+    for (const t of txs) await app.deps.repo.createTransaction({ ...t, id: undefined } as never);
+    const ask = (products: unknown) =>
+      app.inject({ method: "POST", url: "/api/ai/analyze", payload: { from: "2026-10-01", to: "2026-10-31", scope: "products", products } });
+    expect((await ask({ brand: "Mizo" })).statusCode).toBe(200);
+    const none = await ask({ brand: "Parmalat" });
+    expect(none.statusCode).toBe(422);
+    expect(none.json().error).toMatch(/match the product filter/);
+    expect((await ask({ color: "red" })).statusCode).toBe(400);
     await app.close();
   });
 

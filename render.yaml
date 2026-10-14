@@ -14,8 +14,9 @@ services:
     startCommand: cd apps/api && node --conditions=et-dist --disable-warning=ExperimentalWarning dist/index.js
     healthCheckPath: /api/health
     envVars:
+      # Render prefers this over a .node-version file; keep the two the same. The API tests pass on 22 and 24.
       - key: NODE_VERSION
-        value: "22"
+        value: "24"
       - key: HOST
         value: 0.0.0.0
       - key: CORS_ORIGIN

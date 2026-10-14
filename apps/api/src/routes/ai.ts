@@ -43,9 +43,14 @@ export async function aiRoutes(app: FastifyInstance, { repo, ai, config }: AppDe
     const body = parseOrThrow(analyzeRequestSchema, req.body, "analyze request");
     const txs = await repo.listTransactions({ from: body.from, to: body.to });
     if (body.scope === "products") {
-      const agg = productAggregate(txs, toIso(body.from), rangeEnd(body.to));
+      const agg = productAggregate(txs, toIso(body.from), rangeEnd(body.to), body.products);
       if (agg.products.length === 0) {
-        throw new HttpError(422, "No receipt line items in this period yet; scan receipts to compare product prices.");
+        throw new HttpError(
+          422,
+          agg.filter
+            ? "No receipt line items in this period match the product filter."
+            : "No receipt line items in this period yet; scan receipts to compare product prices.",
+        );
       }
       return analyze(ai, body, agg);
     }
