@@ -77,7 +77,8 @@ export function parseAmount(v: unknown, decimal: DecimalSep): number | null {
 
 export type DateOrder = "ymd" | "dmy" | "mdy";
 
-const DATE_RE = /^(\d{1,4})[.\-/ ](\d{1,2})[.\-/ ](\d{1,4})\.?(?:[ T,]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/;
+// A Hungarian Excel writes "2026. 10. 14.": a space may follow each separator.
+const DATE_RE = /^(\d{1,4})(?:[.\-/] *| )(\d{1,2})(?:[.\-/] *| )(\d{1,4})\.?(?:[ T,]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/;
 
 /** Year-first is unambiguous; for "01/02/2026" any part above 12 settles it, and day-first wins a tie (European banks). */
 export function detectDateOrder(values: unknown[]): DateOrder {
