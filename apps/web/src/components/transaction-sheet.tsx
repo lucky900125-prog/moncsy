@@ -19,7 +19,7 @@ type Kind = "expense" | "income";
 export function TransactionSheet() {
   const { open, draft } = useUi((s) => s.txSheet);
   const closeTx = useUi((s) => s.closeTx);
-  const { categories, addTransaction, updateTransaction, removeTransaction } = useApp();
+  const { backend, categories, addTransaction, updateTransaction, removeTransaction } = useApp();
 
   const [kind, setKind] = useState<Kind>("expense");
   const [amount, setAmount] = useState("");
@@ -66,7 +66,10 @@ export function TransactionSheet() {
     try {
       if (editing) await updateTransaction(draft!.id!, payload);
       else await addTransaction(payload);
-      toast.success(editing ? "Módosítva" : "Rögzítve");
+      toast.success(
+        editing ? "Módosítva" : "Rögzítve",
+        backend?.mode === "demo" ? { description: "Demó mód: csak ebben a böngészőben tárolódik, szerverre nem kerül." } : undefined,
+      );
       closeTx();
     } catch (err) {
       toast.error("Mentés sikertelen", { description: (err as Error).message });

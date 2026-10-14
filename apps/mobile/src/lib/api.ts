@@ -14,8 +14,26 @@ export async function getApiUrl() {
   return base ?? "";
 }
 
+// The token goes with every request, so plain http is only accepted where development happens: this device or the
+// local network (on a phone "localhost" is the phone, so the computer running the API has a LAN address).
+const LOCAL_HOST = /^(localhost|.+\.local|127(\.\d{1,3}){3}|10(\.\d{1,3}){3}|192\.168(\.\d{1,3}){2}|172\.(1[6-9]|2\d|3[01])(\.\d{1,3}){2}|\[::1\])$/i;
+
+/** Why this API address cannot be used, or null when it can (an empty address clears the setting). */
+export function apiUrlProblem(url: string): string | null {
+  if (!url) return null;
+  const m = /^(https?):\/\/(\[[^\]]+\]|[^/:?#\s]+)(:\d+)?(\/[^\s]*)?$/i.exec(url);
+  if (!m) return "Érvénytelen API cím. Példa: https://moncsy.example.com";
+  if (m[1]!.toLowerCase() === "http" && !LOCAL_HOST.test(m[2]!)) {
+    return "Titkosítatlan http:// cím csak a helyi hálózaton adható meg, mert a token minden kéréssel megy. Használj https:// címet.";
+  }
+  return null;
+}
+
 export async function setApiUrl(url: string) {
-  base = url.trim().replace(/\/$/, "");
+  const next = url.trim().replace(/\/$/, "");
+  const problem = apiUrlProblem(next);
+  if (problem) throw new ApiError(problem);
+  base = next;
   await AsyncStorage.setItem(KEY, base);
 }
 

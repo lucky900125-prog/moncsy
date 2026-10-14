@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Alert, KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router, useLocalSearchParams } from "expo-router";
@@ -7,16 +7,48 @@ import { X } from "lucide-react-native";
 import type { Transaction } from "@et/shared";
 import { Button, CategoryBadge, Label, useTheme } from "@/components/ui";
 import { useData } from "@/lib/data";
+import { parseDraft, type Draft } from "@/lib/draft";
 import { money } from "@/lib/format";
 
-type Draft = Partial<Omit<Transaction, "id">>;
-
+/**
+ * Also opens from moncsy://tx links, so the parameters are checked before the form gets them: an id has to name a
+ * loaded transaction, and a draft has to be well-formed (lib/draft.ts).
+ */
 export default function TxEditor() {
-  const t = useTheme();
   const { id, draft: draftParam } = useLocalSearchParams<{ id?: string; draft?: string }>();
-  const { transactions, categories, save, remove } = useData();
-  const existing = id ? transactions.find((x) => x.id === id) : undefined;
-  const draft: Draft = useMemo(() => existing ?? (draftParam ? (JSON.parse(draftParam) as Draft) : {}), [existing, draftParam]);
+  const { transactions, loading } = useData();
+  const linked = useMemo(() => parseDraft(draftParam), [draftParam]);
+  // After a delete the list no longer has it; keep showing the form while the modal slides away.
+  const seen = useRef<Transaction | undefined>(undefined);
+  const found = id ? transactions.find((x) => x.id === id) : undefined;
+  if (found) seen.current = found;
+  const existing = found ?? (seen.current?.id === id ? seen.current : undefined);
+
+  if (id && !existing) {
+    return <Notice text={loading ? "Betöltés…" : "Ez a tétel nem található. Lehet, hogy közben törölték."} />;
+  }
+  if (!existing && linked === null) {
+    return <Notice text="A link hibás adatot tartalmaz, ezért nem nyitottam meg a tételt." />;
+  }
+  // Keyed, so the form starts from this transaction's values even when it was opened before the data arrived.
+  return <TxForm key={existing?.id ?? "new"} existing={existing} draft={existing ?? linked ?? {}} fromLink={!!draftParam} />;
+}
+
+function Notice({ text }: { text: string }) {
+  const t = useTheme();
+  return (
+    <SafeAreaView className="flex-1 bg-bg dark:bg-bg-dark">
+      <View className="flex-row items-center justify-end px-4 py-2">
+        <Pressable onPress={() => router.back()} className="p-2" accessibilityLabel="Bezárás"><X size={20} color={t.muted} /></Pressable>
+      </View>
+      <Text className="px-6 pt-8 text-center text-sm text-muted-fg dark:text-muted-fg-dark">{text}</Text>
+    </SafeAreaView>
+  );
+}
+
+function TxForm({ existing, draft, fromLink }: { existing?: Transaction; draft: Draft; fromLink: boolean }) {
+  const t = useTheme();
+  const { categories, save, remove } = useData();
 
   const [kind, setKind] = useState<"expense" | "income">((draft.amount ?? 0) > 0 ? "income" : "expense");
   const [amount, setAmount] = useState(draft.amount ? String(Math.abs(draft.amount)) : "");
@@ -100,7 +132,7 @@ export default function TxEditor() {
               keyboardType="decimal-pad"
               placeholder="0"
               placeholderTextColor={t.muted}
-              autoFocus={!existing && !draftParam}
+              autoFocus={!existing && !fromLink}
               className={`min-w-24 text-center text-4xl font-semibold ${kind === "income" ? "text-positive dark:text-positive-dark" : "text-fg dark:text-fg-dark"}`}
             />
             <Text className="text-lg text-muted-fg dark:text-muted-fg-dark">{currency}</Text>
