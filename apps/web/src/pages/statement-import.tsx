@@ -185,7 +185,10 @@ export function StatementImportPage() {
       if (preview.columns.length) void storeMapping(preview.columns, preview.mapping);
       setResult(r);
       setPhase("done");
-      toast.success(`${r.imported} tétel importálva`, { description: r.skipped ? `${r.skipped} már megvolt, kihagyva` : undefined });
+      const description = r.skipped ? `${r.skipped} már megvolt, kihagyva` : undefined;
+      if (r.imported > 0) toast.success(`${r.imported} tétel importálva`, { description });
+      else if (r.errors?.length) toast.warning("Egy tétel sem került be", { description });
+      else toast("Nem volt új tétel", { description });
       await refresh();
     } catch (e) {
       setError((e as Error).message);
@@ -231,9 +234,13 @@ export function StatementImportPage() {
 
       {phase === "done" && result ? (
         <Card className="flex animate-rise-in flex-col items-start gap-3 p-6">
-          <div className="flex size-11 items-center justify-center rounded-2xl bg-accent text-accent-foreground"><Check className="size-5" /></div>
+          {result.imported > 0 ? (
+            <div className="flex size-11 items-center justify-center rounded-2xl bg-accent text-accent-foreground"><Check className="size-5" /></div>
+          ) : (
+            <div className="flex size-11 items-center justify-center rounded-2xl bg-muted text-muted-foreground"><AlertCircle className="size-5" /></div>
+          )}
           <div>
-            <p className="font-medium">{result.imported} tétel importálva</p>
+            <p className="font-medium">{result.imported > 0 ? `${result.imported} tétel importálva` : result.errors?.length ? "Egy tétel sem került be" : "Nem volt új tétel"}</p>
             <p className="mt-1 text-sm text-muted-foreground">
               {result.skipped ? `${result.skipped} már szerepelt korábbról, ezeket kihagytam. ` : ""}
               {result.errors?.length ? `${result.errors.length} sort a szerver elutasított.` : ""}

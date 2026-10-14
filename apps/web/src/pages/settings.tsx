@@ -20,11 +20,13 @@ import { hu } from "date-fns/locale";
 import { cn } from "@/lib/utils";
 
 function reportImport(r: ImportResult) {
-  toast.success(`${r.imported} tétel importálva`, {
-    description: [r.skipped ? `${r.skipped} duplikátum kihagyva` : null, r.errors?.length ? `${r.errors.length} hibás sor` : null]
-      .filter(Boolean)
-      .join(" · ") || undefined,
-  });
+  const description = [r.skipped ? `${r.skipped} duplikátum kihagyva` : null, r.errors?.length ? `${r.errors.length} hibás sor` : null]
+    .filter(Boolean)
+    .join(" · ") || undefined;
+  // Nothing new is not a success: rejected rows are a warning, only duplicates (or an empty sync) are neutral.
+  if (r.imported > 0) toast.success(`${r.imported} tétel importálva`, { description });
+  else if (r.errors?.length) toast.warning("Egy tétel sem került be", { description });
+  else toast("Nem volt új tétel", { description });
 }
 
 export function SettingsPage() {
