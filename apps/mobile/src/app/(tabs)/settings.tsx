@@ -3,7 +3,8 @@ import { Text, TextInput } from "react-native";
 import { Button, Card, Label, Screen, useTheme } from "@/components/ui";
 import { api, getApiToken, getApiUrl, setApiToken, setApiUrl } from "@/lib/api";
 import { useData } from "@/lib/data";
-import { backupHealth, type BackupStatus } from "@/lib/backup";
+import { backupHealth } from "@/lib/backup";
+import type { BackupStatus } from "@et/shared";
 import { format, formatDistanceToNow } from "date-fns";
 import { hu } from "date-fns/locale";
 
@@ -15,14 +16,15 @@ export default function Settings() {
   const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [backup, setBackup] = useState<BackupStatus | null>(null);
+  const [backupError, setBackupError] = useState<string | null>(null);
 
   useEffect(() => {
     getApiUrl().then(setUrl);
     getApiToken().then(setToken);
-    // Backup state comes with /health; without an address or a valid token there is nothing to show.
+    // Without an API address there is no server and no backup to show.
     getApiUrl()
-      .then((u) => (u ? api.health() : null))
-      .then((h) => setBackup(h?.ai ? (h.backup ?? null) : null), () => setBackup(null));
+      .then((u) => (u ? api.backupStatus() : null))
+      .then(setBackup, (e) => setBackupError((e as Error).message));
   }, []);
 
   async function saveAndTest() {
@@ -33,10 +35,15 @@ export default function Settings() {
       const h = await api.health();
       if (!h.ai) throw new Error(token.trim() ? "Az API elutasította a tokent." : "Az API tokent kér. Add meg fent.");
       setStatus({ ok: true, text: `Kapcsolódva · AI: ${h.ai.provider} (${h.ai.model})` });
+      // /health carries the same BackupStatus as /backup/status, so the check needs no second request.
       setBackup(h.backup ?? null);
+      setBackupError(null);
       await refresh();
     } catch (e) {
       setStatus({ ok: false, text: (e as Error).message });
+      // A card from the previous address or token would describe a server this one could not reach.
+      setBackup(null);
+      setBackupError(null);
     } finally {
       setBusy(false);
     }
@@ -79,15 +86,15 @@ export default function Settings() {
           <Text className={`text-sm ${status.ok ? "text-positive dark:text-positive-dark" : "text-danger dark:text-danger-dark"}`}>{status.text}</Text>
         ) : null}
       </Card>
-      {backup ? <BackupCard status={backup} /> : null}
+      {backup || backupError ? <BackupCard status={backup} error={backupError} /> : null}
     </Screen>
   );
 }
 
-function BackupCard({ status }: { status: BackupStatus }) {
-  const h = backupHealth(status);
+function BackupCard({ status, error }: { status: BackupStatus | null; error: string | null }) {
+  const h = status ? backupHealth(status) : { tone: "error" as const, title: "A mentés állapota nem kérdezhető le", detail: error ?? undefined };
   const tone = h.tone === "error" ? "text-danger dark:text-danger-dark" : h.tone === "warn" ? "text-amber-600 dark:text-amber-300" : h.tone === "ok" ? "text-positive dark:text-positive-dark" : "text-fg dark:text-fg-dark";
-  const last = status.enabled ? status.lastBackupAt : null;
+  const last = status?.enabled ? status.lastBackupAt : null;
   return (
     <Card className="gap-1">
       <Label>Mentés</Label>

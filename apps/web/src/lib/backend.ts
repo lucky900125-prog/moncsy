@@ -1,13 +1,8 @@
 import type {
-  AnalyzeRequest, AnalyzeResponse, Category, ReceiptScanResult, RevolutStatus, StatementMapping, StatementPreview, StatementTx,
+  AnalyzeRequest, AnalyzeResponse, BackupStatus, Category, ReceiptScanResult, RevolutStatus, StatementMapping, StatementPreview, StatementTx,
   Transaction,
 } from "@et/shared";
 import { demoBackend } from "./demo";
-
-/** Off-site backup state as GET /health reports it to an authenticated client (api-contract.md, "Hitelesítés"). */
-export type BackupStatus =
-  | { enabled: false }
-  | { enabled: true; lastBackupAt: string | null; lastError: string | null; pending: boolean };
 
 export type ImportResult = { imported: number; skipped: number; errors?: string[] };
 export type TxQuery = { from?: string; to?: string; categoryId?: string; q?: string };
@@ -32,7 +27,7 @@ export interface Backend {
   parseStatement(file: File, opts?: { mapping?: StatementMapping; currency?: string }): Promise<StatementPreview>;
   importStatement(transactions: StatementTx[]): Promise<ImportResult>;
   exportFile(format: "xlsx" | "xml", range?: { from?: string; to?: string }): Promise<Blob>;
-  /** null when the server does not report backups (demo mode, or an API without the backup feature) */
+  /** null in demo mode: the data stays in this browser, there is no server backup to report */
   backupStatus(): Promise<BackupStatus | null>;
 }
 
@@ -130,7 +125,7 @@ export const apiBackend: Backend = {
   parseStatement: (file, opts = {}) =>
     call("/statements/parse", upload(file, { mapping: opts.mapping ? JSON.stringify(opts.mapping) : undefined, currency: opts.currency })),
   importStatement: (transactions) => call("/statements/import", json("POST", { transactions })),
-  backupStatus: async () => (await call<{ backup?: BackupStatus }>("/health")).backup ?? null,
+  backupStatus: () => call("/backup/status"),
   exportFile: async (format, range) => {
     const res = await fetch(getApiBase() + `/export${qs({ format, ...range })}`, withAuth());
     if (!res.ok) throw await errorFrom(res);

@@ -1,9 +1,5 @@
 // Same rules as apps/web/src/lib/backup.ts (the two apps share no UI code).
-
-/** Off-site backup state as GET /health reports it to an authenticated client (api-contract.md, "Hitelesítés"). */
-export type BackupStatus =
-  | { enabled: false }
-  | { enabled: true; lastBackupAt: string | null; lastError: string | null; pending: boolean };
+import type { BackupStatus } from "@et/shared";
 
 /** Unsaved changes older than this make the backup state a warning. */
 export const BACKUP_STALE_MS = 60 * 60 * 1000;
@@ -13,7 +9,9 @@ export type BackupHealth = { tone: "ok" | "pending" | "warn" | "error" | "off"; 
 /** A backup only runs after a change, so an old lastBackupAt with nothing pending is still current. */
 export function backupHealth(s: BackupStatus, now = Date.now()): BackupHealth {
   if (!s.enabled) return { tone: "off", title: "A szerveren nincs bekapcsolva a mentés", detail: "Az adatok csak a szerver lemezén vannak." };
-  if (s.lastError) return { tone: "error", title: "A legutóbbi mentés nem sikerült", detail: s.lastError };
+  // Stopped also sets lastError (the reason), so it has to be checked first: this one does not retry.
+  if (s.stopped) return { tone: "error", title: "A mentés leállt, a szerver újraindítása kell", detail: s.lastError ?? undefined };
+  if (s.lastError) return { tone: "error", title: "A legutóbbi mentés nem sikerült, a szerver újrapróbálja", detail: s.lastError };
   const age = s.lastBackupAt ? now - Date.parse(s.lastBackupAt) : null;
   if (s.pending && (age === null || age > BACKUP_STALE_MS)) {
     return { tone: "warn", title: "Vannak még nem mentett változások", detail: age === null ? "Még egyszer sem volt sikeres mentés." : undefined };
