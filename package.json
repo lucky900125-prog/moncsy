@@ -1,0 +1,10 @@
+{
+  "name": "expense-tracker",
+  "private": true,
+  "scripts": {
+    "dev:web": "pnpm --filter @et/web dev",
+    "dev:api": "pnpm --filter @et/api dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test"
+  }
+}
