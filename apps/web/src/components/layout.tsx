@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { LayoutGrid, ListOrdered, ScanLine, Sparkles, Settings2, Tags, Plus, type LucideIcon } from "lucide-react";
+import { LayoutGrid, ListOrdered, ScanLine, Sparkles, Settings2, Tags, Plus, Loader2, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TransactionSheet } from "./transaction-sheet";
 import { useApp } from "@/store/app";
@@ -37,6 +37,17 @@ function ModeBadge() {
     >
       Demó mód
     </NavLink>
+  );
+}
+
+function WakingNotice() {
+  const waking = useApp((s) => s.waking);
+  if (!waking) return null;
+  return (
+    <div className="mb-5 flex animate-fade-in items-center gap-3 rounded-xl border bg-card px-4 py-3 text-sm text-muted-foreground">
+      <Loader2 className="size-4 shrink-0 animate-spin text-primary" />
+      A szerver ébred. Az ingyenes tárhely tétlenség után elalszik, az indulás kb. egy perc.
+    </div>
   );
 }
 
@@ -90,7 +101,9 @@ export function Layout() {
           </div>
         </header>
 
-        <main key={location.pathname} className="mx-auto w-full max-w-5xl flex-1 animate-rise-in px-4 pb-28 pt-5 md:px-8 md:pb-10 md:pt-8">
+        {/* Keyed by the top-level section: switching tabs inside a section (Elemzés / Részletek) must not replay the page entrance. */}
+        <main key={location.pathname.split("/")[1]} className="mx-auto w-full max-w-5xl flex-1 animate-rise-in px-4 pb-28 pt-5 md:px-8 md:pb-10 md:pt-8">
+          <WakingNotice />
           <Outlet />
         </main>
       </div>

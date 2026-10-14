@@ -9,9 +9,9 @@ import { Input, Textarea } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Segmented } from "@/components/ui/segmented";
 import { CategoryBadgeIcon } from "./category-dot";
+import { ReceiptItems } from "./receipt-items";
 import { useApp } from "@/store/app";
 import { useUi } from "@/store/ui";
-import { money } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 type Kind = "expense" | "income";
@@ -19,7 +19,7 @@ type Kind = "expense" | "income";
 export function TransactionSheet() {
   const { open, draft } = useUi((s) => s.txSheet);
   const closeTx = useUi((s) => s.closeTx);
-  const { categories, addTransaction, updateTransaction, removeTransaction } = useApp();
+  const { backend, categories, addTransaction, updateTransaction, removeTransaction } = useApp();
 
   const [kind, setKind] = useState<Kind>("expense");
   const [amount, setAmount] = useState("");
@@ -66,7 +66,10 @@ export function TransactionSheet() {
     try {
       if (editing) await updateTransaction(draft!.id!, payload);
       else await addTransaction(payload);
-      toast.success(editing ? "Módosítva" : "Rögzítve");
+      toast.success(
+        editing ? "Módosítva" : "Rögzítve",
+        backend?.mode === "demo" ? { description: "Demó mód: csak ebben a böngészőben tárolódik, szerverre nem kerül." } : undefined,
+      );
       closeTx();
     } catch (err) {
       toast.error("Mentés sikertelen", { description: (err as Error).message });
@@ -149,17 +152,7 @@ export function TransactionSheet() {
           </div>
 
           {items && items.length > 0 && (
-            <div className="grid gap-1.5">
-              <Label>Tételek a blokkról</Label>
-              <ul className="divide-y rounded-lg border bg-muted/40 text-sm">
-                {items.map((it, i) => (
-                  <li key={i} className="flex justify-between gap-3 px-3 py-2">
-                    <span className="truncate">{it.quantity > 1 ? `${it.quantity}× ` : ""}{it.name}</span>
-                    <span className="tabular-nums text-muted-foreground">{money(it.total, draft?.currency ?? "HUF")}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
+            <ReceiptItems label="Tételek a blokkról" items={items} currency={draft?.currency ?? "HUF"} onChange={setItems} />
           )}
 
           <div className="grid gap-1.5">

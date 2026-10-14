@@ -1,10 +1,13 @@
-import type { AnalyzeResponse, Category, Transaction } from "@et/shared";
+import type { AnalyzeResponse, Category, PackUnit, ProductFilter, ReceiptItem, Transaction } from "@et/shared";
+import { buildProductStats, rankStores } from "@et/shared/products";
 import type { Backend, TxQuery } from "./backend";
+import { demoParseStatement } from "./demo-statement";
 import { uid } from "./utils";
 
 /** Local, offline backend used when the API is not reachable. Data lives in localStorage. */
 
-const KEY = "moncsy-demo-v1";
+// v2: grocery receipts carry line items for the Részletek tab; older demo data is replaced once.
+const KEY = "moncsy-demo-v2";
 
 export const DEFAULT_CATEGORIES: Category[] = [
   { id: "groceries", name: "Élelmiszer", icon: "shopping-cart", color: "#7c9a7e", isCustom: false, budget: 120000 },
@@ -22,6 +25,43 @@ export const DEFAULT_CATEGORIES: Category[] = [
 ];
 
 type Db = { categories: Category[]; transactions: Transaction[] };
+
+// [product, brand, packSize, packUnit, price, sold by weight]
+const CATALOG: [string, string | null, number, PackUnit, number, boolean][] = [
+  ["tej", "Mizo", 1, "l", 429, false],
+  ["kenyér", null, 500, "g", 549, false],
+  ["trappista sajt", "Tolle", 500, "g", 2199, false],
+  ["banán", null, 1, "kg", 599, true],
+  ["tojás", null, 10, "db", 899, false],
+  ["ásványvíz", "Szentkirályi", 1.5, "l", 219, false],
+  ["kávé", "Tchibo", 250, "g", 2490, false],
+  ["csirkemell", null, 1, "kg", 2690, true],
+  ["vaj", "Président", 200, "g", 949, false],
+  ["túró rudi", "Pöttyös", 1, "db", 189, false],
+];
+// Lidl and Aldi are cheaper on most lines, Spar dearer; each product still varies a little per store.
+const STORE_LEVEL: Record<string, number> = { Lidl: 0.94, Aldi: 0.95, Penny: 0.97, Tesco: 1, Spar: 1.06 };
+
+function receiptItems(store: string, r: () => number): ReceiptItem[] {
+  const n = 3 + Math.floor(r() * 4);
+  const picked = [...CATALOG].sort(() => r() - 0.5).slice(0, n);
+  return picked.map(([product, brand, packSize, packUnit, price, byWeight]) => {
+    const wobble = 1 + ((product.length * 7 + store.length * 13) % 9 - 4) / 100;
+    const unitPrice = Math.round((price * (STORE_LEVEL[store] ?? 1) * wobble) / 10) * 10 - 1;
+    const quantity = byWeight ? Math.round((0.6 + r()) * 1000) / 1000 : product === "ásványvíz" ? 6 : 1 + Math.floor(r() * 2);
+    const size = packUnit === "db" && packSize > 1 ? `${packSize} db` : `${packSize}${packUnit}`;
+    return {
+      name: `${brand ? `${brand} ` : ""}${product}${byWeight ? "" : ` ${size}`}`,
+      quantity,
+      unitPrice,
+      total: Math.round(unitPrice * quantity),
+      product,
+      brand,
+      packSize,
+      packUnit,
+    };
+  });
+}
 
 function rng(seed: number) {
   return () => {
@@ -62,10 +102,12 @@ function seed(): Db {
       const n = Math.max(0, Math.round(count * scale));
       for (let i = 0; i < n; i++) {
         const day = 1 + Math.floor(r() * daysInMonth);
-        const amt = Math.round((min + r() * (max - min)) / 10) * 10;
+        const merchant = pick(names);
+        const source = r() > 0.6 ? "receipt" : "revolut";
+        const items = cat === "groceries" && source === "receipt" ? receiptItems(merchant, r) : undefined;
+        const amt = items ? items.reduce((s, i) => s + i.total, 0) : Math.round((min + r() * (max - min)) / 10) * 10;
         tx.push({
-          id: uid(), amount: -amt, currency: "HUF", merchant: pick(names), categoryId: cat,
-          source: r() > 0.6 ? "receipt" : "revolut",
+          id: uid(), amount: -amt, currency: "HUF", merchant, categoryId: cat, source, ...(items ? { items } : {}),
           date: new Date(base.getFullYear(), base.getMonth(), day, 8 + Math.floor(r() * 12), Math.floor(r() * 60)).toISOString(),
         });
       }
@@ -170,11 +212,11 @@ export const demoBackend: Backend = {
       confidence: 0.5,
       suggestedCategoryId: "groceries",
       items: [
-        { name: "Félzsíros tej 1,5l", quantity: 2, unitPrice: 459, total: 918 },
-        { name: "Teljes kiőrlésű kenyér", quantity: 1, unitPrice: 899, total: 899 },
-        { name: "Trappista sajt 500g", quantity: 1, unitPrice: 2199, total: 2199 },
-        { name: "Banán", quantity: 1, unitPrice: 749, total: 749 },
-        { name: "Csirkemell filé", quantity: 1, unitPrice: 3975, total: 3975 },
+        { name: "Félzsíros tej 1,5l", quantity: 2, unitPrice: 459, total: 918, product: "tej", brand: "Mizo", packSize: 1.5, packUnit: "l" },
+        { name: "Teljes kiőrlésű kenyér", quantity: 1, unitPrice: 899, total: 899, product: "kenyér", brand: null, packSize: 500, packUnit: "g" },
+        { name: "Trappista sajt 500g", quantity: 1, unitPrice: 2199, total: 2199, product: "trappista sajt", brand: "Tolle", packSize: 500, packUnit: "g" },
+        { name: "Banán", quantity: 1, unitPrice: 749, total: 749, product: "banán", brand: null, packSize: 1, packUnit: "kg" },
+        { name: "Csirkemell filé", quantity: 1, unitPrice: 3975, total: 3975, product: "csirkemell", brand: null, packSize: 1, packUnit: "kg" },
       ],
       rawText: "DEMÓ – nem valódi felismerés",
     };
@@ -183,6 +225,7 @@ export const demoBackend: Backend = {
     await sleep(900);
     const d = getDb();
     const tx = d.transactions.filter((t) => t.date >= req.from && t.date <= req.to);
+    if (req.scope === "products") return demoProductAnalysis(tx, req.question, req.products);
     const exp = tx.filter((t) => t.amount < 0);
     const total = exp.reduce((s, t) => s - t.amount, 0);
     const byCat = new Map<string, number>();
@@ -206,5 +249,61 @@ export const demoBackend: Backend = {
   revolutSync: () => notInDemo("A Revolut szinkron"),
   revolutImportStatement: () => notInDemo("A Revolut kivonat importálása"),
   importFile: () => notInDemo("Az XLSX/XML import"),
+  async parseStatement(_file, opts) {
+    await sleep(700);
+    return demoParseStatement(opts);
+  },
+  async importStatement(rows) {
+    const d = getDb();
+    const known = new Set(d.transactions.map((t) => t.externalId).filter(Boolean));
+    const fresh = rows.filter((r) => !known.has(r.externalId));
+    d.transactions = [...fresh.map((r) => ({ ...r, id: uid() })), ...d.transactions].sort((a, b) => b.date.localeCompare(a.date));
+    save(d);
+    return { imported: fresh.length, skipped: rows.length - fresh.length, errors: [] };
+  },
   exportFile: () => notInDemo("Az XLSX/XML export"),
+  // The demo keeps its data in this browser only; there is no server backup to report.
+  backupStatus: async () => null,
 };
+
+function demoProductAnalysis(tx: Transaction[], question?: string, filter?: ProductFilter): AnalyzeResponse {
+  const low = (s: string) => s.toLocaleLowerCase("hu");
+  const all = buildProductStats(tx);
+  // Same narrowing as the server's "products" filter (case-insensitive here; the server also ignores accents).
+  const filtered = all.filter(
+    (p) =>
+      (!filter?.q || low(`${p.product} ${p.history.map((h) => h.name).join(" ")}`).includes(low(filter.q))) &&
+      (!filter?.brand || low(p.brand ?? "") === low(filter.brand)) &&
+      (!filter?.merchant || p.stores.some((s) => low(s.store) === low(filter.merchant!))),
+  );
+  if (filter && filtered.length === 0) throw new Error("A szűrésnek egyik termék sem felel meg.");
+  // Stand-in for the model reading the question: narrow to the brands or products it names, if any.
+  const q = low(question ?? "");
+  const named = filtered.filter((p) => (p.brand && q.includes(low(p.brand))) || q.includes(low(p.product)));
+  const stats = named.length ? named : filtered;
+  if (stats.length === 0) throw new Error("Ebben az időszakban még nincs blokktétel. Olvass be blokkokat, hogy össze lehessen hasonlítani az árakat.");
+  const compared = stats.filter((p) => p.cheapest);
+  const best = rankStores(stats)[0];
+  const fmt = (n: number) => `${Math.round(n).toLocaleString("hu-HU")} Ft`;
+  const unit = (u: string | null) => (u ? `/${u}` : "/db");
+  return {
+    provider: "demo",
+    model: "helyi szabályok",
+    summary: best
+      ? `${compared.length} terméket vettél több boltban; ${best.cheapestFor} esetben a ${best.store} volt a legolcsóbb. Ez demó elemzés, valódi AI nélkül.`
+      : "Még nincs olyan termék, amit több boltban is megvettél. Ez demó elemzés, valódi AI nélkül.",
+    insights: [...compared]
+      .sort((a, b) => (b.saving ?? 0) - (a.saving ?? 0))
+      .slice(0, 6)
+      .map((p) => {
+        const lo = p.stores[0]!;
+        const hi = p.stores[p.stores.length - 1]!;
+        const price = (s: typeof lo) => (p.baseUnit ? (s.avgBasePrice ?? s.avgUnitPrice) : s.avgUnitPrice);
+        return {
+          title: `${p.brand ? `${p.brand} ` : ""}${p.product}: ${lo.store}`,
+          detail: `${fmt(price(lo))}${unit(p.baseUnit)} a ${lo.store} boltban, ${fmt(price(hi))}${unit(p.baseUnit)} a ${hi.store} boltban.`,
+          severity: "positive" as const,
+        };
+      }),
+  };
+}

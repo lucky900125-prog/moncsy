@@ -32,6 +32,9 @@ jobs:
         run: pnpm --filter @et/web build
         env:
           BASE_PATH: /${{ github.event.repository.name }}/
+          # <account>.github.io is shared by all Pages sites of the account, so no caching service worker here
+          # (see apps/web/vite.config.ts). Set "on" once the app has an origin of its own.
+          PWA_SERVICE_WORKER: "off"
       # GitHub Pages serves 404.html for unknown paths, which lets deep links like /moncsy/tetelek load the SPA.
       - run: cp apps/web/dist/index.html apps/web/dist/404.html
       - uses: actions/upload-pages-artifact@v3

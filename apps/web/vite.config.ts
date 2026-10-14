@@ -7,12 +7,22 @@ import path from "node:path";
 // BASE_PATH lets the same build run at a sub-path, e.g. GitHub Pages: BASE_PATH=/moncsy/
 const base = process.env.BASE_PATH ?? "/";
 
+// PWA_SERVICE_WORKER=off ships a worker that unregisters itself and empties the origin's caches, so the worker of an
+// earlier build goes away too. The Pages build uses it: <account>.github.io is shared by every Pages site of the
+// account, any of them can rewrite this app's cached files, and the worker would serve them on every start. On an
+// origin of its own (a custom domain) leave it "on" for the offline-capable worker.
+const serviceWorker = process.env.PWA_SERVICE_WORKER ?? "on";
+if (serviceWorker !== "on" && serviceWorker !== "off") {
+  throw new Error(`PWA_SERVICE_WORKER must be "on" or "off", got "${serviceWorker}"`);
+}
+
 export default defineConfig({
   base,
   plugins: [
     react(),
     tailwindcss(),
     VitePWA({
+      selfDestroying: serviceWorker === "off",
       registerType: "autoUpdate",
       includeAssets: ["icon.svg"],
       manifest: {
