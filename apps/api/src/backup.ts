@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -223,6 +223,27 @@ export class GithubStore {
 }
 
 /**
+ * SQLite's own consistency check of a database file, opened read-only. null when it is sound, otherwise what is wrong.
+ * A file that is not a database, or is cut short, makes SQLite throw instead of answering; that is what is wrong then.
+ */
+export function checkDatabaseFile(path: string): string | null {
+  let db: DatabaseSync | undefined;
+  try {
+    db = new DatabaseSync(path, { readOnly: true });
+    const rows = db.prepare("PRAGMA integrity_check").all() as { integrity_check: string }[];
+    if (rows.length === 0) return "integrity_check returned nothing";
+    const problems = rows.map((r) => r.integrity_check).filter((m) => m !== "ok");
+    if (problems.length === 0) return null;
+    const more = problems.length > 5 ? `; and ${problems.length - 5} more` : "";
+    return `integrity_check: ${problems.slice(0, 5).join("; ")}${more}`;
+  } catch (e) {
+    return (e as Error).message;
+  } finally {
+    db?.close();
+  }
+}
+
+/**
  * Downloads and decrypts the latest copy when the local file is missing.
  * Returns what happened, for the start-up log.
  */
@@ -263,12 +284,108 @@ export async function restoreIfMissing(dbPath: string, cfg: BackupConfig, store 
     } finally {
       closeSync(fd);
     }
+    // Decrypting proves the bytes are the ones uploaded, not that they were a sound database when they were.
+    const damage = checkDatabaseFile(partial);
+    if (damage) {
+      throw new Error(
+        `${cfg.repo}/${cfg.path} generation ${generation} decrypted, but it is not a sound database (${damage}). Not starting from it: ` +
+          "restore an earlier generation from the repository history.",
+      );
+    }
     renameSync(partial, dbPath);
   } catch (e) {
     rmSync(partial, { force: true });
     throw e;
   }
   return `restored ${dbPath} from ${cfg.repo}/${cfg.path}, generation ${generation} (${blob.length} bytes)`;
+}
+
+/**
+ * Checks the copy the next start would restore, the way that start would, and changes nothing: no upload, no file
+ * at DB_PATH, no generation. A restore tried with the live settings would instead write a database that its own
+ * scheduler could upload, with a new generation, over the copy the running server keeps. Problems are lines that
+ * start with "PROBLEM:"; a failure to read GitHub at all throws, because then nothing was checked.
+ */
+export async function verifyBackup(cfg: BackupConfig, store = new GithubStore(cfg)): Promise<{ ok: boolean; lines: string[] }> {
+  const where = `${cfg.repo}/${cfg.path}`;
+  const lines: string[] = [];
+  let problems = 0;
+  const problem = (text: string) => {
+    problems++;
+    lines.push(`PROBLEM: ${text}`);
+  };
+  const done = (generation?: number) => {
+    lines.push(
+      problems === 0 && generation !== undefined
+        ? `OK: the next start would restore generation ${generation} from this copy.`
+        : `NOT OK: ${problems} problem(s) above.`,
+    );
+    return { ok: problems === 0 && generation !== undefined, lines };
+  };
+
+  const blob = await store.download();
+  const history = await store.history();
+  const last = history.maxGeneration === null ? "" : `, up to generation ${history.maxGeneration}`;
+  if (!blob) {
+    if (history.commits === 0) problem(`there is no backup at ${where} yet`);
+    else problem(`${where} is gone, but its history has ${history.commits} commit(s)${last}; the next start refuses to start empty`);
+    return done();
+  }
+  let plain: { data: Buffer; generation: number };
+  try {
+    plain = decryptBlob(blob, cfg.key);
+  } catch (e) {
+    problem(`${where} (${blob.length} bytes): ${(e as Error).message}`);
+    return done();
+  }
+  const { data, generation } = plain;
+  lines.push(`copy: ${where}, generation ${generation}, ${blob.length} bytes`);
+  lines.push(`history: ${history.commits} commit(s), highest generation ${history.maxGeneration ?? "none named"}`);
+  lines.push("decrypt: ok");
+  if (history.maxGeneration !== null && history.maxGeneration > generation) {
+    problem(
+      `the file holds generation ${generation}, but generation ${history.maxGeneration} was written later: the copy was rolled back, ` +
+        "and the next start refuses it",
+    );
+  }
+
+  const dir = mkdtempSync(join(tmpdir(), "moncsy-verify-"));
+  try {
+    const file = join(dir, "copy.db");
+    writeFileSync(file, data);
+    const damage = checkDatabaseFile(file);
+    if (damage) {
+      problem(damage.startsWith("integrity_check:") ? damage : `not a sound database: ${damage}`);
+      return done();
+    }
+    lines.push("integrity_check: ok");
+    const db = new DatabaseSync(file, { readOnly: true });
+    try {
+      const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[]).map(
+        (t) => t.name,
+      );
+      const count = (t: string) => (db.prepare(`SELECT COUNT(*) AS n FROM "${t.replaceAll('"', '""')}"`).get() as { n: number }).n;
+      lines.push(`rows: ${tables.map((t) => `${t} ${count(t)}`).join(", ") || "no tables"}`);
+      // The restored database continues from the generation it records; without it, or with another one, its first upload stops.
+      const meta = tables.includes("meta")
+        ? new Map((db.prepare("SELECT key, value FROM meta WHERE key IN (?, ?)").all(META_GENERATION, META_AT) as { key: string; value: string }[]).map((r) => [r.key, r.value]))
+        : new Map<string, string>();
+      const recorded = meta.get(META_GENERATION);
+      if (recorded === undefined) {
+        problem("the copy does not record which generation it is (meta backup_generation), so the server restored from it would stop its backups");
+      } else {
+        lines.push(`made: ${meta.get(META_AT) ?? "unknown"}, recorded generation ${recorded}`);
+        if (Number(recorded) !== generation) {
+          problem(`the copy records generation ${recorded}, but the file says ${generation}, so the server restored from it would stop its backups`);
+        }
+      }
+    } finally {
+      db.close();
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  return done(generation);
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
