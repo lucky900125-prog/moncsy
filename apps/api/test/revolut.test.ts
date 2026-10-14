@@ -4,7 +4,7 @@ import { openDb } from "../src/db.js";
 import { Repository } from "../src/repository.js";
 import { BusinessApiRevolutProvider } from "../src/revolut/business-api.js";
 import { categorize } from "../src/revolut/categorize.js";
-import { parseStatementCsv, revolutDate, statementExternalId, toTransactions } from "../src/revolut/csv.js";
+import { parseStatementCsv, parseStatementXlsx, revolutDate, statementExternalId, toTransactions } from "../src/revolut/csv.js";
 import { OpenBankingRevolutProvider } from "../src/revolut/open-banking.js";
 import { multipart, testApp } from "./helpers.js";
 
@@ -48,6 +48,16 @@ describe("Revolut statement parsing", () => {
     expect(categorize("BENU Gyógyszertár", -1)).toBe("health");
     expect(categorize("Card refund Zara", 5000, "CARD_REFUND")).toBe("clothing");
     expect(categorize("Random shop", -1)).toBeNull();
+    // Rule words are matched against accent-stripped input, so the rules themselves must be accent-free.
+    expect(categorize("Fővárosi Vízművek Zrt.", -5000)).toBe("utilities");
+  });
+
+  it("treats a header-only statement as empty, not as broken rows", async () => {
+    expect(parseStatementCsv("Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance\n")).toEqual({ rows: [], errors: [] });
+    const wb = new ExcelJS.Workbook();
+    wb.addWorksheet("Statement").addRow(["Type", "Product", "Started Date", "Completed Date", "Description", "Amount", "Fee", "Currency", "State", "Balance"]);
+    expect(await parseStatementXlsx(Buffer.from(await wb.xlsx.writeBuffer()))).toEqual({ rows: [], errors: [] });
+    expect(() => parseStatementCsv("")).toThrow(/Not a Revolut statement/);
   });
 });
 

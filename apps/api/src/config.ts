@@ -33,17 +33,28 @@ function pickAIProvider(env: NodeJS.ProcessEnv): AIProviderName {
   return "mock";
 }
 
+function pickRevolutMode(env: NodeJS.ProcessEnv): RevolutMode {
+  const explicit = env.REVOLUT_MODE?.trim().toLowerCase();
+  if (explicit === "business-api" || explicit === "open-banking" || explicit === "csv") return explicit;
+  if (explicit) throw new Error(`Unknown REVOLUT_MODE "${explicit}" (expected business-api|open-banking|csv)`);
+  return env.REVOLUT_BUSINESS_TOKEN ? "business-api" : "csv";
+}
+
+function pickPort(env: NodeJS.ProcessEnv): number {
+  const raw = env.PORT?.trim();
+  if (!raw) return 8787;
+  const port = Number(raw);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error(`Invalid PORT "${raw}" (expected an integer 0-65535)`);
+  return port;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const provider = pickAIProvider(env);
   const apiKey =
     env.AI_API_KEY ||
     (provider === "anthropic" ? env.ANTHROPIC_API_KEY : provider === "openai" ? env.OPENAI_API_KEY : undefined);
-  const revolutMode = (env.REVOLUT_MODE || (env.REVOLUT_BUSINESS_TOKEN ? "business-api" : "csv")) as RevolutMode;
-  if (!["business-api", "open-banking", "csv"].includes(revolutMode)) {
-    throw new Error(`Unknown REVOLUT_MODE "${revolutMode}" (expected business-api|open-banking|csv)`);
-  }
   return {
-    port: Number(env.PORT || 8787),
+    port: pickPort(env),
     host: env.HOST || "127.0.0.1",
     dbPath: env.DB_PATH || "./data/expense.db",
     corsOrigin: env.CORS_ORIGIN || "http://localhost:5173,http://localhost:4173",
@@ -56,7 +67,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       anthropicFallbacks: (env.ANTHROPIC_FALLBACKS || "on").toLowerCase() !== "off",
     },
     revolut: {
-      mode: revolutMode,
+      mode: pickRevolutMode(env),
       businessToken: env.REVOLUT_BUSINESS_TOKEN || undefined,
       env: env.REVOLUT_ENV === "sandbox" ? "sandbox" : "production",
     },

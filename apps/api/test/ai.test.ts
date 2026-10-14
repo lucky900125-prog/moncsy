@@ -134,6 +134,16 @@ describe("provider adapters (fetch stubbed, no network)", () => {
     expect(() => loadConfig({ AI_PROVIDER: "gemini" })).toThrow(/Unknown AI_PROVIDER/);
   });
 
+  it("validates PORT and REVOLUT_MODE instead of starting with NaN or an unknown mode", () => {
+    expect(loadConfig({}).port).toBe(8787);
+    expect(loadConfig({ PORT: " 3000 " }).port).toBe(3000);
+    expect(() => loadConfig({ PORT: "abc" })).toThrow(/Invalid PORT "abc"/);
+    expect(() => loadConfig({ PORT: "70000" })).toThrow(/Invalid PORT/);
+    expect(loadConfig({ REVOLUT_MODE: " CSV " }).revolut.mode).toBe("csv");
+    expect(loadConfig({ REVOLUT_BUSINESS_TOKEN: "t" }).revolut.mode).toBe("business-api");
+    expect(() => loadConfig({ REVOLUT_MODE: "wise" })).toThrow(/Unknown REVOLUT_MODE "wise"/);
+  });
+
   it("anthropic: Messages API request shape, image/PDF blocks, refusal handling", async () => {
     const fetchMock = vi.fn(async () => Response.json({ content: [{ type: "text", text: '{"a":1}' }], stop_reason: "end_turn" }));
     vi.stubGlobal("fetch", fetchMock);
