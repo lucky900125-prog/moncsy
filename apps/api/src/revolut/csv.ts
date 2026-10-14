@@ -141,11 +141,16 @@ function normalizeRecords(records: Record<string, unknown>[], keys: string[]): {
 }
 
 export function parseStatementCsv(text: string): { rows: StatementRow[]; errors: string[] } {
-  const header = (parse(text, { bom: true, skip_empty_lines: true, trim: true, to_line: 1 }) as string[][])[0] ?? [];
-  const records = parse(text, { columns: true, bom: true, skip_empty_lines: true, trim: true, relax_column_count: true }) as Record<
-    string,
-    unknown
-  >[];
+  // relax_quotes: a stray quote inside a description (`Spar 5" cable`) is part of the text, not a broken file.
+  const common = { bom: true, skip_empty_lines: true, trim: true, relax_quotes: true } as const;
+  let header: string[];
+  let records: Record<string, unknown>[];
+  try {
+    header = (parse(text, { ...common, to_line: 1 }) as string[][])[0] ?? [];
+    records = parse(text, { ...common, columns: true, relax_column_count: true }) as Record<string, unknown>[];
+  } catch (e) {
+    throw badRequest(`Not a readable CSV file: ${(e as Error).message}`);
+  }
   return normalizeRecords(records, header);
 }
 

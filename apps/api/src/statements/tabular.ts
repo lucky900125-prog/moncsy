@@ -123,7 +123,14 @@ function isTransactionRow(r: Cell[], idx: Partial<Record<StatementRole, number>>
   } catch {
     return false;
   }
-  return [idx.amount, idx.debit, idx.credit].some((i) => i !== undefined && parseAmount(r[i], detectDecimal([r[i]])) !== null);
+  return [idx.amount, idx.debit, idx.credit].some((i) => {
+    if (i === undefined) return false;
+    try {
+      return parseAmount(r[i], detectDecimal([r[i]])) !== null;
+    } catch {
+      return false; // a value parseAmount rejects outright ("abc") is not an amount either
+    }
+  });
 }
 
 export function parseTabular(rows: Cell[][], opts: TabularOptions): TabularResult {
