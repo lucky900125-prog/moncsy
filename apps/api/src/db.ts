@@ -118,42 +118,73 @@ export async function openDb(path: string): Promise<DB> {
   const raw = new DatabaseSync(path);
   raw.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
   const db = new SqliteDb(raw);
-  await migrate(db);
+  try {
+    await migrate(db);
+  } catch (e) {
+    db.close();
+    throw new Error(`Could not open the database at ${path}: ${(e as Error).message}`, { cause: e });
+  }
   await seedCategories(db);
   return db;
 }
 
-async function migrate(db: DB): Promise<void> {
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS categories (
-      id         TEXT PRIMARY KEY,
-      name       TEXT NOT NULL,
-      icon       TEXT NOT NULL,
-      color      TEXT NOT NULL,
-      is_custom  INTEGER NOT NULL DEFAULT 0,
-      parent_id  TEXT REFERENCES categories(id) ON DELETE SET NULL,
-      budget     REAL,
-      sort       INTEGER NOT NULL DEFAULT 0
+const META_SCHEMA_VERSION = "schema_version";
+
+/**
+ * The schema changes in order. The database records how many it has had (meta "schema_version"), and each one runs once,
+ * in its own transaction together with that record. Append only: a change to the schema is a new entry, never an edit
+ * of one that databases have already had.
+ */
+export const MIGRATIONS: readonly ((db: DB) => Promise<void>)[] = [
+  // 1: the schema before versioning. IF NOT EXISTS, so a database made then passes through unchanged and is counted as 1.
+  (db) =>
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS categories (
+        id         TEXT PRIMARY KEY,
+        name       TEXT NOT NULL,
+        icon       TEXT NOT NULL,
+        color      TEXT NOT NULL,
+        is_custom  INTEGER NOT NULL DEFAULT 0,
+        parent_id  TEXT REFERENCES categories(id) ON DELETE SET NULL,
+        budget     REAL,
+        sort       INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE IF NOT EXISTS transactions (
+        id          TEXT PRIMARY KEY,
+        amount      REAL NOT NULL,
+        currency    TEXT NOT NULL,
+        date        TEXT NOT NULL,
+        merchant    TEXT NOT NULL,
+        note        TEXT,
+        category_id TEXT REFERENCES categories(id) ON DELETE SET NULL,
+        source      TEXT NOT NULL,
+        items       TEXT,
+        external_id TEXT UNIQUE
+      );
+      CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date);
+      CREATE INDEX IF NOT EXISTS idx_tx_category ON transactions(category_id);
+    `),
+];
+
+/** Brings the schema up to the last of `migrations`; a database already past them was written by newer code and is refused. */
+export async function migrate(db: DB, migrations: readonly ((db: DB) => Promise<void>)[] = MIGRATIONS): Promise<void> {
+  // The version lives in meta, so meta comes first, outside the numbered changes.
+  await db.exec("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)");
+  const stored = await getMeta(db, META_SCHEMA_VERSION);
+  const version = stored === null ? 0 : Number(stored);
+  if (stored !== null && !/^\d+$/.test(stored)) throw new Error(`it has schema_version "${stored}", which is not a whole number`);
+  if (version > migrations.length) {
+    throw new Error(
+      `it has schema version ${version}, but this server knows only up to ${migrations.length}: a newer version of moncsy wrote it. ` +
+        "Not starting, so this version cannot damage it; deploy the newer version again.",
     );
-    CREATE TABLE IF NOT EXISTS transactions (
-      id          TEXT PRIMARY KEY,
-      amount      REAL NOT NULL,
-      currency    TEXT NOT NULL,
-      date        TEXT NOT NULL,
-      merchant    TEXT NOT NULL,
-      note        TEXT,
-      category_id TEXT REFERENCES categories(id) ON DELETE SET NULL,
-      source      TEXT NOT NULL,
-      items       TEXT,
-      external_id TEXT UNIQUE
-    );
-    CREATE INDEX IF NOT EXISTS idx_tx_date ON transactions(date);
-    CREATE INDEX IF NOT EXISTS idx_tx_category ON transactions(category_id);
-    CREATE TABLE IF NOT EXISTS meta (
-      key   TEXT PRIMARY KEY,
-      value TEXT
-    );
-  `);
+  }
+  for (let v = version; v < migrations.length; v++) {
+    await db.tx(async (t) => {
+      await migrations[v]!(t);
+      await setMeta(t, META_SCHEMA_VERSION, String(v + 1));
+    });
+  }
 }
 
 /** Idempotent: inserts any default category that is missing; rows the user has edited are left alone. */
