@@ -44,6 +44,8 @@ export function CategoriesPage() {
     e.preventDefault();
     const b = budget.trim() ? Number(budget.replace(/\s/g, "")) : null;
     if (b !== null && !Number.isFinite(b)) return toast.error("A keret nem szám");
+    // A zero budget would read as "no budget" everywhere, and the API refuses a negative one.
+    if (b !== null && b <= 0) return toast.error("A keret 0-nál nagyobb összeg legyen, vagy hagyd üresen");
     const data = { name: name.trim(), icon, color, budget: b };
     try {
       if (editing.cat) await updateCategory(editing.cat.id, data);
