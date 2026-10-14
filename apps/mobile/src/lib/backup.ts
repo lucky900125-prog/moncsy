@@ -9,9 +9,10 @@ export type BackupHealth = { tone: "ok" | "pending" | "warn" | "error" | "off"; 
 /** A backup only runs after a change, so an old lastBackupAt with nothing pending is still current. */
 export function backupHealth(s: BackupStatus, now = Date.now()): BackupHealth {
   if (!s.enabled) return { tone: "off", title: "A szerveren nincs bekapcsolva a mentés", detail: "Az adatok csak a szerver lemezén vannak." };
-  // Stopped also sets lastError (the reason), so it has to be checked first: this one does not retry.
-  if (s.stopped) return { tone: "error", title: "A mentés leállt, a szerver újraindítása kell", detail: s.lastError ?? undefined };
-  if (s.lastError) return { tone: "error", title: "A legutóbbi mentés nem sikerült, a szerver újrapróbálja", detail: s.lastError };
+  // Stopped also sets lastError, so it is checked first. It does not retry, and what fixes it (a restart, or also
+  // removing the local or the remote copy) depends on the reason, which the server writes into lastError.
+  if (s.stopped) return { tone: "error", title: "A mentés leállt, magától nem indul újra", detail: s.lastError ?? undefined };
+  if (s.lastError) return { tone: "error", title: "A legutóbbi mentés nem sikerült", detail: s.lastError };
   const age = s.lastBackupAt ? now - Date.parse(s.lastBackupAt) : null;
   if (s.pending && (age === null || age > BACKUP_STALE_MS)) {
     return { tone: "warn", title: "Vannak még nem mentett változások", detail: age === null ? "Még egyszer sem volt sikeres mentés." : undefined };
