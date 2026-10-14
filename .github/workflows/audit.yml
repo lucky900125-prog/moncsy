@@ -1,0 +1,31 @@
+# Fails on a dependency with a known high or critical advisory, apart from those accepted in pnpm-workspace.yaml
+# (auditConfig). Kept out of ci on purpose (architect's CI-06): an advisory published upstream, with no change here,
+# must not block the deploy of an unrelated fix. So it runs on pull requests that change dependencies, and weekly.
+name: audit
+
+on:
+  pull_request:
+    paths:
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - "**/package.json"
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      # Reads the lockfile; nothing is installed.
+      - run: pnpm audit --audit-level high
