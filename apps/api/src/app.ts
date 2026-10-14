@@ -3,6 +3,7 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import { createAIProvider, type AIProvider } from "./ai/index.js";
+import { DailyLimitedProvider } from "./ai/quota.js";
 import { BackupScheduler, type BackupConfig } from "./backup.js";
 import { loadConfig, type AppConfig } from "./config.js";
 import { openDb, type DB } from "./db.js";
@@ -50,7 +51,7 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
     config,
     db,
     repo,
-    ai: opts.ai ?? createAIProvider(config.ai),
+    ai: new DailyLimitedProvider(opts.ai ?? createAIProvider(config.ai), config.ai.dailyLimit),
     revolut: opts.revolut ?? createRevolutProvider(config.revolut, repo),
     backup: null,
   };

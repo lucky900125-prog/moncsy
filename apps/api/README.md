@@ -75,6 +75,7 @@ For hosts whose disk is wiped on restart (Render's free plan), set `BACKUP_GITHU
 | `AI_TIMEOUT_MS` | `90000` (ollama `180000`) | Per-request timeout |
 | `AI_JSON_MODE` | `on` | openai provider: send `response_format: json_object`. Set `off` for servers that reject it |
 | `ANTHROPIC_FALLBACKS` | `on` | anthropic provider: server-side refusal fallback (see below) |
+| `AI_DAILY_LIMIT` | `100` | AI calls allowed per UTC day, over receipt scans, analyses and PDF statements together; the next one gets 429 until 00:00 UTC. `0` turns the AI off. Counted in memory, so a restart starts the day again: set a spending cap at the provider too |
 | `REVOLUT_MODE` | auto | `business-api` \| `open-banking` \| `csv`. If unset: `business-api` when `REVOLUT_BUSINESS_TOKEN` is set, else `csv` |
 | `REVOLUT_BUSINESS_TOKEN` | – | Revolut Business API access token |
 | `REVOLUT_ENV` | `production` | `production` or `sandbox` |
