@@ -117,7 +117,10 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
         api.addHook("onRequest", async (req, reply) => {
           if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return;
           const error = backup.refusal();
-          if (error === null) return;
+          if (error === null) {
+            if (isAuthorized(config, req)) await backup.markDirty();
+            return;
+          }
           refused.add(req);
           return reply.status(503).send({ error });
         });

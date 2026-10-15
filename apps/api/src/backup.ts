@@ -27,6 +27,8 @@ const MAGIC = Buffer.from("MONCSYBK2");
 const HEADER_LENGTH = MAGIC.length + 8;
 const META_GENERATION = "backup_generation";
 const META_AT = "backup_at";
+/** "1" from before the first write after an upload until an upload covers it, so a restart on a lasting disk still uploads it. */
+const META_DIRTY = "backup_dirty";
 
 export interface BackupConfig {
   /** "owner/name" of a private repository */
@@ -425,6 +427,10 @@ export class BackupScheduler {
   private unconfirmed: { generation: number; at: string; blob: Buffer; changes: number } | null = null;
   /** the highest generation in the file's history; new generations go above it, also after an accepted reset */
   private historyMax = 0;
+  /** META_DIRTY is "1" in the database */
+  private dirty = false;
+  /** after a failed upload, no new attempt before this time, however many writes arrive */
+  private retryAt: number | null = null;
   private closed = false;
   private status: BackupStatus = { enabled: true, lastBackupAt: null, generation: null, lastError: null, pending: false, stopped: false };
 
@@ -440,8 +446,31 @@ export class BackupScheduler {
     const generation = await getMeta(this.db, META_GENERATION);
     this.status.generation = generation === null ? null : Number(generation);
     this.status.lastBackupAt = await getMeta(this.db, META_AT);
-    // What is on disk now is either the restored copy or not worth a commit on its own (migrations, seeding).
+    // What is on disk now is either the restored copy or not worth a commit on its own (migrations, seeding)...
     this.savedChanges = await this.totalChanges();
+    // ...unless writes made before the restart never reached an upload: then they go up without waiting for a new one.
+    if ((await getMeta(this.db, META_DIRTY)) === "1") {
+      this.dirty = true;
+      this.savedChanges = null;
+      this.log.info("changes made before the restart were not backed up yet; uploading them");
+      this.touch();
+    }
+  }
+
+  /**
+   * Called before a request that may write. Records in the database that a write is about to happen, so the fact survives
+   * a crash or a restart before the upload. The record itself is not counted as a change, so a request that then writes
+   * nothing still uploads nothing.
+   */
+  async markDirty(): Promise<void> {
+    if (this.dirty || this.closed) return;
+    const delta = await this.db.tx(async (t) => {
+      const before = await this.totalChanges(t);
+      await setMeta(t, META_DIRTY, "1");
+      return (await this.totalChanges(t)) - before;
+    });
+    this.dirty = true;
+    if (this.savedChanges !== null) this.savedChanges += delta;
   }
 
   getStatus(): BackupStatus {
@@ -478,8 +507,8 @@ export class BackupScheduler {
     const now = Date.now();
     this.pendingSince ??= now;
     this.status.pending = true;
-    // Writes keep postponing the upload, but not past maxWaitMs from the first one.
-    const wait = Math.max(0, Math.min(this.cfg.debounceMs, this.pendingSince + this.maxWaitMs() - now));
+    // Writes keep postponing the upload, but not past maxWaitMs from the first one, and never bring a retry forward.
+    const wait = Math.max(0, Math.min(this.cfg.debounceMs, this.pendingSince + this.maxWaitMs() - now), (this.retryAt ?? 0) - now);
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => void this.flush(), wait);
   }
@@ -515,15 +544,20 @@ export class BackupScheduler {
     this.log.error(`backup stopped: ${reason}`);
   }
 
-  /** Records an upload GitHub accepted, in the database and in the status. */
-  private async recordUploaded(generation: number, at: string): Promise<number> {
-    // Measured inside one transaction, so a write that lands meanwhile is not mistaken for these two.
-    const delta = await this.db.tx(async (t) => {
+  /** Records an upload GitHub accepted, in the database and in the status; `changes` is the counter the upload covers. */
+  private async recordUploaded(generation: number, at: string, changes: number): Promise<number> {
+    // Measured inside one transaction, so a write that lands meanwhile is not mistaken for these.
+    const { delta, clean } = await this.db.tx(async (t) => {
       const before = await this.totalChanges(t);
       await setMeta(t, META_GENERATION, String(generation));
       await setMeta(t, META_AT, at);
-      return (await this.totalChanges(t)) - before;
+      // A write made during the upload is not in it, so it keeps the mark.
+      const clean = before === changes;
+      if (clean) await setMeta(t, META_DIRTY, "0");
+      return { delta: (await this.totalChanges(t)) - before, clean };
     });
+    this.dirty = !clean;
+    this.retryAt = null;
     this.unconfirmed = null;
     this.status = { ...this.status, generation, lastBackupAt: at, lastError: null };
     return delta;
@@ -537,7 +571,7 @@ export class BackupScheduler {
     if (this.unconfirmed && blob.equals(this.unconfirmed.blob)) {
       // The upload whose response was lost did land: it is ours, so continue from it.
       const { generation, at, changes } = this.unconfirmed;
-      this.savedChanges = changes + (await this.recordUploaded(generation, at));
+      this.savedChanges = changes + (await this.recordUploaded(generation, at, changes));
       this.log.info(`backup ${generation} had reached ${this.cfg.repo}/${this.cfg.path} although its request failed`);
       return true;
     }
@@ -609,6 +643,8 @@ export class BackupScheduler {
         const put = snapshot.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value");
         put.run(META_GENERATION, String(generation));
         put.run(META_AT, at);
+        // A database restored from this copy has nothing to upload yet.
+        put.run(META_DIRTY, "0");
       } finally {
         snapshot.close();
       }
@@ -617,7 +653,7 @@ export class BackupScheduler {
       await this.store.upload(blob, `backup ${generation} ${at}`);
       // `changes` was read before the snapshot: a write made during the upload keeps the counter ahead of this,
       // so it is uploaded next time instead of being taken as saved.
-      this.savedChanges = changes + (await this.recordUploaded(generation, at));
+      this.savedChanges = changes + (await this.recordUploaded(generation, at, changes));
       if ((await this.totalChanges()) === this.savedChanges) {
         this.status.pending = false;
         this.pendingSince = null;
@@ -636,7 +672,12 @@ export class BackupScheduler {
       this.log.error(`backup failed, will retry: ${(e as Error).message}`);
       // Retry later even if nothing else is written. A failed upload leaves the remote unknown, so the retry reads it
       // first: it adopts an upload that did land, and stops if another instance wrote the copy.
-      if (!this.closed) this.timer = setTimeout(() => void this.flush(), Math.max(60_000, this.cfg.debounceMs));
+      // A write during the upload set a timer of its own; it is replaced, not left to fire before the retry is due.
+      if (this.timer) clearTimeout(this.timer);
+      this.timer = null;
+      const delay = Math.max(60_000, this.cfg.debounceMs);
+      this.retryAt = Date.now() + delay;
+      if (!this.closed) this.timer = setTimeout(() => void this.flush(), delay);
     } finally {
       rmSync(tmp, { force: true });
     }
