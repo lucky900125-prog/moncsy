@@ -1,4 +1,4 @@
-import { zonedToUtc } from "../revolut/csv.js";
+import { fromExcelSerial, isCalendarDate, zonedToUtc } from "../revolut/csv.js";
 
 /** Lower case, no accents, single spaces: the form header names and keywords are compared in. */
 export const fold = (s: string) =>
@@ -95,11 +95,6 @@ export function detectDateOrder(values: unknown[]): DateOrder {
   return mdy > dmy ? "mdy" : "dmy";
 }
 
-/** Days since 1899-12-30, the Excel epoch, for cells that arrive as plain serial numbers. */
-function fromExcelSerial(n: number): Date {
-  return new Date(Date.UTC(1899, 11, 30) + Math.round(n * 86400000));
-}
-
 /**
  * A statement date in the bank's local time (STATEMENT_TZ), returned as an ISO instant.
  * A date without a time becomes local noon, so it stays on the same calendar day in any nearby time zone.
@@ -135,7 +130,7 @@ export function parseStatementDate(v: unknown, order: DateOrder, timeZone: strin
       throw new Error(`invalid date "${str}"`);
     }
   }
-  if (mo < 1 || mo > 12 || d < 1 || d > 31) throw new Error(`invalid date "${String(v)}"`);
+  if (!isCalendarDate(y, mo, d, h, mi, s)) throw new Error(`invalid date "${String(v)}"`);
   return zonedToUtc(y, mo, d, h, mi, s, timeZone).toISOString();
 }
 

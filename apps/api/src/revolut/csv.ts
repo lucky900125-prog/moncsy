@@ -66,6 +66,17 @@ function tzOffset(utcMs: number, timeZone: string): number {
 }
 
 /** Converts a wall-clock time in `timeZone` to a UTC instant (DST-aware). */
+/** Date.UTC rolls 31 February over into March and 99:99 into later days; a statement date that needs that is wrong, not later. */
+export function isCalendarDate(y: number, mo: number, d: number, h = 0, mi = 0, s = 0): boolean {
+  if (mo < 1 || mo > 12 || d < 1 || h > 23 || mi > 59 || s > 59) return false;
+  return d <= new Date(Date.UTC(y, mo, 0)).getUTCDate();
+}
+
+/** Days since 1899-12-30, the Excel epoch, for cells that arrive as plain serial numbers; the wall-clock time is encoded as UTC. */
+export function fromExcelSerial(n: number): Date {
+  return new Date(Date.UTC(1899, 11, 30) + Math.round(n * 86400000));
+}
+
 export function zonedToUtc(y: number, mo: number, d: number, h: number, mi: number, s: number, timeZone: string): Date {
   const guess = Date.UTC(y, mo - 1, d, h, mi, s);
   let t = guess - tzOffset(guess, timeZone);
@@ -80,6 +91,8 @@ export function zonedToUtc(y: number, mo: number, d: number, h: number, mi: numb
  * A statement opened in a Hungarian Excel and saved again as CSV has "2026. 10. 01. 8:15" instead.
  */
 export function revolutDate(v: unknown, timeZone = process.env.STATEMENT_TZ || "Europe/Budapest"): string {
+  // A General-formatted cell holds the Excel serial number; 2958465 is 9999-12-31.
+  if (typeof v === "number" && v > 0 && v < 2958466) return revolutDate(fromExcelSerial(v), timeZone);
   if (v instanceof Date) {
     return zonedToUtc(v.getUTCFullYear(), v.getUTCMonth() + 1, v.getUTCDate(), v.getUTCHours(), v.getUTCMinutes(), v.getUTCSeconds(), timeZone).toISOString();
   }
@@ -87,10 +100,12 @@ export function revolutDate(v: unknown, timeZone = process.env.STATEMENT_TZ || "
   const m = s.match(/^(\d{4})(?:-|\. ?)(\d{1,2})(?:-|\. ?)(\d{1,2})\.?(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
   if (m) {
     const [, y, mo, d, h = "0", mi = "0", sec = "0"] = m;
+    if (!isCalendarDate(+y!, +mo!, +d!, +h, +mi, +sec)) throw new Error(`invalid date "${s}"`);
     return zonedToUtc(+y!, +mo!, +d!, +h, +mi, +sec, timeZone).toISOString();
   }
   const t = Date.parse(s);
-  if (Number.isNaN(t)) throw new Error(`invalid date "${s}"`);
+  // Date.parse reads a bare number such as "46309" as that year.
+  if (Number.isNaN(t) || /^\d+$/.test(s)) throw new Error(`invalid date "${s}"`);
   return new Date(t).toISOString();
 }
 

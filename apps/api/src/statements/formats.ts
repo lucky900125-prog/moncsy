@@ -128,7 +128,8 @@ export function parseOfx(text: string, timeZone: string): FormatResult {
   const tag = (block: string, name: string) => block.match(new RegExp(`<${name}>([^<\\r\\n]*)`, "i"))?.[1]?.trim() ?? "";
   // A file can hold several statements (accounts, cards), each with its own CURDEF before its transactions.
   const curdefs = [...text.matchAll(/<CURDEF>\s*([A-Za-z]{3})/gi)].map((m) => ({ at: m.index, ccy: m[1]!.toUpperCase() }));
-  const found = [...text.matchAll(/<STMTTRN>([\s\S]*?)(?=<\/STMTTRN>|<STMTTRN>|<\/BANKTRANLIST>)/gi)];
+  // A block ends at its closing tag, the next block, the end of the list, or (in a file cut short) the end of the text.
+  const found = [...text.matchAll(/<STMTTRN>([\s\S]*?)(?=<\/STMTTRN>|<STMTTRN>|<\/BANKTRANLIST>|(?![\s\S]))/gi)];
   const currencies = currencyAt(
     found.map((m) => m.index),
     curdefs,
