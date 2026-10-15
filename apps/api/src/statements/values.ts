@@ -1,4 +1,4 @@
-import { fromExcelSerial, isCalendarDate, zonedToUtc } from "../revolut/csv.js";
+import { fromExcelSerial, isCalendarDate, zonedToUtc } from "./dates.js";
 
 /** Lower case, no accents, single spaces: the form header names and keywords are compared in. */
 export const fold = (s: string) =>

@@ -13,10 +13,9 @@ export function parseModelJson<T extends z.ZodType>(provider: string, raw: strin
   try {
     data = JSON.parse(text);
   } catch (e) {
-    // The model's raw answer (and the parser's message, which quotes it) goes to the server log only (SEC-API-09).
-    throw new HttpError(502, `AI provider "${provider}" returned invalid JSON`, undefined, {
-      cause: new Error(`${(e as Error).message}; the answer: ${raw.slice(0, 1000)}`),
-    });
+    // The answer is the receipt or statement the owner sent, so neither it nor the parser's message (which quotes it)
+    // goes to the client or to the server log: only its length and the kind of error do (SEC-API-09).
+    throw new HttpError(502, `AI provider "${provider}" returned invalid JSON`, undefined, { cause: new Error(answerShape(raw, e)) });
   }
   const r = schema.safeParse(data);
   if (!r.success) {
@@ -25,8 +24,14 @@ export function parseModelJson<T extends z.ZodType>(provider: string, raw: strin
       502,
       `AI provider "${provider}" returned JSON that does not match the expected shape: ${issues.join("; ")}`,
       { issues },
-      { cause: new Error(`the answer: ${raw.slice(0, 1000)}`) },
+      { cause: new Error(answerShape(raw)) },
     );
   }
   return r.data;
+}
+
+/** What the log may say about a model's answer without quoting it. */
+function answerShape(raw: string, parseError?: unknown): string {
+  const kind = parseError instanceof Error ? `${parseError.name}; ` : "";
+  return `${kind}the answer was ${raw.length} characters`;
 }

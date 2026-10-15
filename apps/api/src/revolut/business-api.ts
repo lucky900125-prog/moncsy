@@ -87,7 +87,7 @@ export class BusinessApiRevolutProvider implements RevolutProvider {
     }
     if (!res.ok) {
       // Revolut's own text goes to the server log (as the cause), not to the client (SEC-API-09).
-      const cause = new Error(`Revolut answered: ${(await res.text()).slice(0, 2000)}`);
+      const cause = new Error(`Revolut answered: ${(await res.text()).slice(0, 500)}`);
       throw new HttpError(502, `Revolut Business API ${path} returned HTTP ${res.status}`, undefined, { cause });
     }
     return (await res.json()) as T;

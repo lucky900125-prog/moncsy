@@ -38,7 +38,7 @@ describe("HTTP hardening", () => {
     })()!;
     expect(err.statusCode).toBe(502);
     expect(JSON.stringify({ error: err.message, details: err.details })).not.toMatch(/SPAR/);
-    expect(String((err.cause as Error).message)).toMatch(/SPAR/);
+    expect(String((err.cause as Error).message)).not.toMatch(/SPAR/);
   });
 
   it("logs the path of a request without its query string (RUN-10)", () => {

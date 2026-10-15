@@ -4,6 +4,7 @@ import type { RevolutStatus } from "@et/shared";
 import { getMeta, setMeta } from "../db.js";
 import { badRequest } from "../errors.js";
 import { decodeText, detectDelimiter } from "../io/text.js";
+import { fromExcelSerial, isCalendarDate, zonedToUtc } from "../statements/dates.js";
 import { assertStatementRows, assertTextStatementSize } from "../statements/limits.js";
 import type { Repository } from "../repository.js";
 import { categorize } from "./categorize.js";
@@ -48,49 +49,13 @@ const HEADER_ALIASES: Record<keyof StatementRow, string[]> = {
   balance: ["balance"],
 };
 
-/** One formatter per time zone: building one costs far more than using it, and a statement converts every row. */
-const tzFormats = new Map<string, Intl.DateTimeFormat>();
-
-/** Offset (ms) of `timeZone` from UTC at the given instant. */
-function tzOffset(utcMs: number, timeZone: string): number {
-  let format = tzFormats.get(timeZone);
-  if (!format) {
-    format = new Intl.DateTimeFormat("en-US", {
-      timeZone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit",
-    });
-    tzFormats.set(timeZone, format);
-  }
-  const parts = format.formatToParts(new Date(utcMs));
-  const get = (t: string) => Number(parts.find((p) => p.type === t)!.value);
-  return Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second")) - utcMs;
-}
-
-/** Converts a wall-clock time in `timeZone` to a UTC instant (DST-aware). */
-/** Date.UTC rolls 31 February over into March and 99:99 into later days; a statement date that needs that is wrong, not later. */
-export function isCalendarDate(y: number, mo: number, d: number, h = 0, mi = 0, s = 0): boolean {
-  if (mo < 1 || mo > 12 || d < 1 || h > 23 || mi > 59 || s > 59) return false;
-  return d <= new Date(Date.UTC(y, mo, 0)).getUTCDate();
-}
-
-/** Days since 1899-12-30, the Excel epoch, for cells that arrive as plain serial numbers; the wall-clock time is encoded as UTC. */
-export function fromExcelSerial(n: number): Date {
-  return new Date(Date.UTC(1899, 11, 30) + Math.round(n * 86400000));
-}
-
-export function zonedToUtc(y: number, mo: number, d: number, h: number, mi: number, s: number, timeZone: string): Date {
-  const guess = Date.UTC(y, mo - 1, d, h, mi, s);
-  let t = guess - tzOffset(guess, timeZone);
-  t = guess - tzOffset(t, timeZone);
-  return new Date(t);
-}
-
 /**
  * Revolut writes local wall-clock time without an offset ("2026-10-01 08:15:42").
- * It is interpreted in STATEMENT_TZ (default Europe/Budapest) and stored as UTC.
+ * It is interpreted in `timeZone` (STATEMENT_TZ from the config) and stored as UTC.
  * Excel Date cells carry the same wall-clock time encoded as UTC, so they are re-interpreted too.
  * A statement opened in a Hungarian Excel and saved again as CSV has "2026. 10. 01. 8:15" instead.
  */
-export function revolutDate(v: unknown, timeZone = process.env.STATEMENT_TZ || "Europe/Budapest"): string {
+export function revolutDate(v: unknown, timeZone: string): string {
   // A General-formatted cell holds the Excel serial number; 2958465 is 9999-12-31.
   if (typeof v === "number" && v > 0 && v < 2958466) return revolutDate(fromExcelSerial(v), timeZone);
   if (v instanceof Date) {
@@ -121,7 +86,7 @@ function toNum(v: unknown, field: string, required: boolean): number | null {
 }
 
 /** Validates the header first, so an empty statement is told apart from a file that is not a statement at all. */
-function normalizeRecords(records: Record<string, unknown>[], keys: string[]): { rows: StatementRow[]; errors: string[] } {
+function normalizeRecords(records: Record<string, unknown>[], keys: string[], timeZone: string): { rows: StatementRow[]; errors: string[] } {
   const find = (field: keyof StatementRow) => keys.find((k) => HEADER_ALIASES[field].includes(k.trim().toLowerCase()));
   const col = Object.fromEntries((Object.keys(HEADER_ALIASES) as (keyof StatementRow)[]).map((f) => [f, find(f)])) as Record<
     keyof StatementRow,
@@ -144,8 +109,8 @@ function normalizeRecords(records: Record<string, unknown>[], keys: string[]): {
       rows.push({
         type: String(get("type") ?? "").trim(),
         product: String(get("product") ?? "").trim(),
-        startedDate: revolutDate(get("startedDate")),
-        completedDate: completed === undefined || completed === null || String(completed).trim() === "" ? null : revolutDate(completed),
+        startedDate: revolutDate(get("startedDate"), timeZone),
+        completedDate: completed === undefined || completed === null || String(completed).trim() === "" ? null : revolutDate(completed, timeZone),
         description: String(get("description") ?? "").trim(),
         amount: toNum(get("amount"), "Amount", true)!,
         fee: toNum(get("fee"), "Fee", false) ?? 0,
@@ -161,7 +126,7 @@ function normalizeRecords(records: Record<string, unknown>[], keys: string[]): {
 }
 
 /** The app writes commas; a statement saved again from a Hungarian Excel has semicolons. */
-export function parseStatementCsv(text: string, delimiter = detectDelimiter(text)): { rows: StatementRow[]; errors: string[] } {
+export function parseStatementCsv(text: string, timeZone: string, delimiter = detectDelimiter(text)): { rows: StatementRow[]; errors: string[] } {
   // relax_quotes: a stray quote inside a description (`Spar 5" cable`) is part of the text, not a broken file.
   const common = { bom: true, delimiter, skip_empty_lines: true, trim: true, relax_quotes: true } as const;
   let header: string[];
@@ -172,11 +137,11 @@ export function parseStatementCsv(text: string, delimiter = detectDelimiter(text
   } catch (e) {
     throw badRequest(`Not a readable CSV file: ${(e as Error).message}`);
   }
-  return normalizeRecords(records, header);
+  return normalizeRecords(records, header, timeZone);
 }
 
 /** The rows of the statement's sheet, first row the header. */
-export function parseStatementSheet(rows: SheetCell[][]): { rows: StatementRow[]; errors: string[] } {
+export function parseStatementSheet(rows: SheetCell[][], timeZone: string): { rows: StatementRow[]; errors: string[] } {
   const header = (rows[0] ?? []).map((c) => String(cellValue(c)).trim());
   const records: Record<string, unknown>[] = [];
   for (const row of rows.slice(1)) {
@@ -189,13 +154,13 @@ export function parseStatementSheet(rows: SheetCell[][]): { rows: StatementRow[]
     });
     if (Object.values(rec).some((v) => v !== null && v !== undefined && v !== "")) records.push(rec);
   }
-  return normalizeRecords(records, header.filter(Boolean));
+  return normalizeRecords(records, header.filter(Boolean), timeZone);
 }
 
-export async function parseStatementXlsx(buf: Buffer): Promise<{ rows: StatementRow[]; errors: string[] }> {
+export async function parseStatementXlsx(buf: Buffer, timeZone: string): Promise<{ rows: StatementRow[]; errors: string[] }> {
   const sheet = busiestSheet(await readWorkbook(buf, "Not a readable XLSX file"));
   if (!sheet) throw badRequest("The XLSX file has no worksheets");
-  return parseStatementSheet(sheet.rows);
+  return parseStatementSheet(sheet.rows, timeZone);
 }
 
 /** externalId = hash of date + amount + description (an occurrence suffix separates identical rows in one file). */
@@ -239,13 +204,14 @@ export function toTransactions(rows: StatementRow[]): { txs: ParsedStatementTx[]
 export async function importStatement(
   repo: Repository,
   file: { filename: string; mimetype: string; data: Buffer },
+  timeZone: string,
 ): Promise<{ imported: number; skipped: number; errors: string[] }> {
   const isXlsx =
     /\.xlsx$/i.test(file.filename) ||
     file.mimetype === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
     file.data.subarray(0, 2).toString("latin1") === "PK";
   if (!isXlsx) assertTextStatementSize(file.data);
-  const { rows, errors } = isXlsx ? await parseStatementXlsx(file.data) : parseStatementCsv(decodeText(file.data));
+  const { rows, errors } = isXlsx ? await parseStatementXlsx(file.data, timeZone) : parseStatementCsv(decodeText(file.data), timeZone);
   assertStatementRows(rows.length + errors.length);
   const { txs, ignored } = toTransactions(rows);
   let imported = 0;
