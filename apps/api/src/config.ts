@@ -74,6 +74,23 @@ function pickAIDailyLimit(env: NodeJS.ProcessEnv): number {
   return limit;
 }
 
+/** Checked at start: an unknown zone would otherwise fail every statement import with a 500. */
+function pickStatementTz(env: NodeJS.ProcessEnv): string {
+  const tz = env.STATEMENT_TZ?.trim() || "Europe/Budapest";
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: tz });
+  } catch {
+    throw new Error(`Invalid STATEMENT_TZ "${tz}" (expected an IANA time zone such as Europe/Budapest)`);
+  }
+  return tz;
+}
+
+function pickDefaultCurrency(env: NodeJS.ProcessEnv): string {
+  const raw = env.DEFAULT_CURRENCY?.trim() || "HUF";
+  if (!/^[A-Za-z]{3}$/.test(raw)) throw new Error(`Invalid DEFAULT_CURRENCY "${raw}" (expected a three-letter ISO 4217 code such as HUF)`);
+  return raw.toUpperCase();
+}
+
 const LOOPBACK = new Set(["127.0.0.1", "::1", "localhost"]);
 
 /**
@@ -101,8 +118,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     corsOrigin: env.CORS_ORIGIN || "http://localhost:5173,http://localhost:4173",
     apiToken: (env.API_TOKEN_FILE ? readFileSync(env.API_TOKEN_FILE, "utf8") : env.API_TOKEN)?.trim() || undefined,
     trustProxyHops: pickProxyHops(env),
-    defaultCurrency: (env.DEFAULT_CURRENCY || "HUF").toUpperCase(),
-    statementTz: env.STATEMENT_TZ || "Europe/Budapest",
+    defaultCurrency: pickDefaultCurrency(env),
+    statementTz: pickStatementTz(env),
     ai: {
       provider,
       model: env.AI_MODEL || undefined,
