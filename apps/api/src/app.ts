@@ -38,6 +38,11 @@ export interface BuildOptions {
   logger?: boolean;
 }
 
+/** What the request log keeps of a request: the path without its query string, which can hold search terms and dates (RUN-10). */
+export function requestLogFields(req: { method: string; url: string; ip?: string }) {
+  return { method: req.method, url: req.url.split("?")[0], remoteAddress: req.ip };
+}
+
 /** After this many wrong tokens from one address in AUTH_WINDOW_MS, that address gets 429 until the window ends. */
 const AUTH_MAX_FAILURES = 20;
 const AUTH_WINDOW_MS = 10 * 60 * 1000;
@@ -57,11 +62,18 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
   };
 
   // Behind a reverse proxy (Render) the client address is in X-Forwarded-For; TRUST_PROXY_HOPS says how many proxies to trust.
-  const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 2 * 1024 * 1024, trustProxy: (_addr: string, hop: number) => hop < config.trustProxyHops });
+  const app = Fastify({ logger: opts.logger ? { serializers: { req: requestLogFields } } : false, bodyLimit: 2 * 1024 * 1024, trustProxy: (_addr: string, hop: number) => hop < config.trustProxyHops });
   if (opts.backup) {
     deps.backup = new BackupScheduler(db, opts.backup, { info: (m) => app.log.info(m), error: (m) => app.log.error(m) });
     await deps.backup.init();
   }
+  // Answers carry the owner's data: no cache keeps them, no browser guesses their type, no link passes on the address (SEC-API-10).
+  app.addHook("onSend", async (_req, reply, payload) => {
+    reply.header("cache-control", "no-store");
+    reply.header("x-content-type-options", "nosniff");
+    reply.header("referrer-policy", "no-referrer");
+    return payload;
+  });
   await app.register(cors, {
     origin: config.corsOrigin === "*" ? true : config.corsOrigin.split(",").map((s) => s.trim()),
     // @fastify/cors allows only GET, HEAD and POST by default; a cross-origin web client also edits and deletes.

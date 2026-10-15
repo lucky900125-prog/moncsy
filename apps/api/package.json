@@ -7,9 +7,9 @@
     "node": ">=24"
   },
   "scripts": {
-    "dev": "tsx watch --disable-warning=ExperimentalWarning src/index.ts",
+    "dev": "tsx watch src/index.ts",
     "build": "tsc -p ../../packages/shared/tsconfig.build.json && tsc -p tsconfig.build.json",
-    "start": "node --conditions=et-dist --disable-warning=ExperimentalWarning dist/index.js",
+    "start": "node --conditions=et-dist dist/index.js",
     "verify-backup": "node --conditions=et-dist dist/verify-backup.js",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"

@@ -20,14 +20,25 @@ export async function postJson(
     throw new HttpError(502, `AI provider "${provider}" request failed: ${(e as Error).message}`);
   }
   const text = await res.text();
+  // The provider's own text goes to the server log (as the cause), not to the client (SEC-API-09).
+  const answered = { cause: new Error(`${provider} answered: ${text.slice(0, 2000)}`) };
   if (!res.ok) {
-    throw new HttpError(502, `AI provider "${provider}" returned HTTP ${res.status}: ${text.slice(0, 500)}`);
+    throw new HttpError(502, `AI provider "${provider}" returned HTTP ${res.status} (${providerHint(res.status)})`, undefined, answered);
   }
   try {
     return JSON.parse(text);
   } catch {
-    throw new HttpError(502, `AI provider "${provider}" returned a non-JSON HTTP body: ${text.slice(0, 200)}`);
+    throw new HttpError(502, `AI provider "${provider}" returned a body that is not JSON`, undefined, answered);
   }
+}
+
+/** What the owner can do about a provider's status, said without repeating the provider's text. */
+function providerHint(status: number): string {
+  if (status === 401 || status === 403) return "check the API key";
+  if (status === 404) return "check AI_MODEL and AI_BASE_URL";
+  if (status === 429) return "rate limit or quota reached; try again later";
+  if (status >= 500) return "the provider failed; try again later";
+  return "the provider refused the request; the server log has its answer";
 }
 
 /**
