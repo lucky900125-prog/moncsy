@@ -1,3 +1,5 @@
+import { exifOrientation, orientationTiff } from "./exif.js";
+
 /**
  * A JPEG without the metadata a camera or phone writes into it: EXIF (where and when the photo was taken, the device,
  * a thumbnail), XMP, IPTC and comments can all name a place or a person, and none of it helps reading a receipt.
@@ -72,41 +74,7 @@ function keepApp(marker: number, payload: Buffer): boolean {
   return false;
 }
 
-/** The Orientation tag (0x0112) of IFD0 in a TIFF structure, or null when it is absent or cannot be read. */
-function exifOrientation(tiff: Buffer): number | null {
-  if (tiff.length < 8) return null;
-  const order = tiff.subarray(0, 2).toString("latin1");
-  if (order !== "II" && order !== "MM") return null;
-  const u16 = (at: number) => (order === "II" ? tiff.readUInt16LE(at) : tiff.readUInt16BE(at));
-  const u32 = (at: number) => (order === "II" ? tiff.readUInt32LE(at) : tiff.readUInt32BE(at));
-  const ifd = u32(4);
-  if (ifd + 2 > tiff.length) return null;
-  const count = u16(ifd);
-  for (let i = 0; i < count; i++) {
-    const entry = ifd + 2 + i * 12;
-    if (entry + 12 > tiff.length) return null;
-    // SHORT (3), one value, stored in the first two bytes of the value field.
-    if (u16(entry) === 0x0112 && u16(entry + 2) === 3 && u32(entry + 4) === 1) {
-      const value = u16(entry + 8);
-      return value >= 1 && value <= 8 ? value : null;
-    }
-  }
-  return null;
-}
-
-/** An APP1 EXIF block holding nothing but the orientation: a big-endian TIFF header and a one-entry IFD0. */
+/** An APP1 EXIF block holding nothing but the orientation. */
 function orientationExif(orientation: number): Buffer {
-  const b = Buffer.alloc(36);
-  b.writeUInt16BE(0xffe1, 0);
-  b.writeUInt16BE(34, 2);
-  b.write("Exif\0\0MM", 4, "latin1");
-  b.writeUInt16BE(0x002a, 12);
-  b.writeUInt32BE(8, 14);
-  b.writeUInt16BE(1, 18);
-  b.writeUInt16BE(0x0112, 20);
-  b.writeUInt16BE(3, 22);
-  b.writeUInt32BE(1, 24);
-  b.writeUInt16BE(orientation, 28);
-  // The value field's other two bytes (30-31) and the next-IFD offset (32-35) stay zero.
-  return b;
+  return Buffer.concat([Buffer.from("ffe10022457869660000", "hex"), orientationTiff(orientation)]);
 }

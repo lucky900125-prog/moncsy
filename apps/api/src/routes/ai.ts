@@ -1,7 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import { readUpload, type AppDeps } from "../app.js";
 import { HttpError, badRequest } from "../errors.js";
+import { stripHeifMetadata } from "../io/heif.js";
 import { stripJpegMetadata } from "../io/jpeg.js";
+import { stripPngMetadata } from "../io/png.js";
+import { stripWebpMetadata } from "../io/webp.js";
 import { toIso, rangeEnd } from "../repository.js";
 import { analyzeRequestSchema, parseOrThrow } from "../schemas.js";
 import { aggregate, analyze, productAggregate } from "../services/analyze.js";
@@ -16,6 +19,15 @@ const BY_EXT: Record<string, string> = {
   heic: "image/heic",
   heif: "image/heif",
   pdf: "application/pdf",
+};
+
+/** Each image format with the function that takes its metadata out; a PDF goes as it is. */
+const STRIP: Record<string, { format: string; strip: (data: Buffer) => Buffer }> = {
+  "image/jpeg": { format: "JPEG", strip: stripJpegMetadata },
+  "image/png": { format: "PNG", strip: stripPngMetadata },
+  "image/webp": { format: "WebP", strip: stripWebpMetadata },
+  "image/heic": { format: "HEIC", strip: stripHeifMetadata },
+  "image/heif": { format: "HEIF", strip: stripHeifMetadata },
 };
 
 /** Trusts magic bytes over the client's content type; falls back to the file extension. */
@@ -39,11 +51,12 @@ export async function aiRoutes(app: FastifyInstance, { repo, ai, config }: AppDe
     }
     // A photo's EXIF can hold where it was taken; the clients re-encode without it, and this holds for any other sender.
     let image = file.data;
-    if (mime === "image/jpeg") {
+    const format = STRIP[mime];
+    if (format) {
       try {
-        image = stripJpegMetadata(file.data);
+        image = format.strip(file.data);
       } catch (e) {
-        throw badRequest(`The image is not a readable JPEG: ${(e as Error).message}`);
+        throw badRequest(`The image is not a readable ${format.format}: ${(e as Error).message}`);
       }
     }
     return scanReceipt(ai, await repo.listCategories(), image.toString("base64"), mime);
