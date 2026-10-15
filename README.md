@@ -20,7 +20,7 @@ Ha az API nem érhető el, a web „Demó mód”-ban fut böngészőben tárolt
 
 A `pnpm-workspace.yaml` csak az ott felsorolt függőségek telepítő-szkriptjét engedi futni, és egy napnál frissebb csomagverziót nem old fel. Ha egy régebbi telepítés után a `pnpm install` `ERR_PNPM_IGNORED_BUILDS` hibával áll meg, töröld egyszer a `node_modules` mappákat (`rm -rf node_modules apps/*/node_modules packages/*/node_modules`), és telepíts újra.
 
-A `pnpm audit --audit-level high` hetente és minden függőséget módosító PR-on lefut (`.github/workflows/audit.yml`); a két elfogadott, csak a mobil eszközláncot érintő találat a `pnpm-workspace.yaml` `auditConfig` részében van, indoklással. A Dependabot hetente nyit frissítési PR-t (`.github/dependabot.yml`).
+A `pnpm audit --audit-level high` hetente és minden függőséget módosító PR-on lefut (`.github/workflows/audit.yml`); a két elfogadott, csak a mobil eszközláncot érintő találat a `pnpm-workspace.yaml` `auditConfig` részében van, indoklással. A Dependabot hetente nyit frissítési PR-t (`.github/dependabot.yml`). Minden GitHub Action egy commitra van rögzítve (a verzió megjegyzésben), mert egy tag később más kódra mutathat; a Dependabot a commitot és a megjegyzést együtt frissíti.
 
 ## Élő demó
 

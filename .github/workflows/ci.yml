@@ -18,12 +18,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # No job pushes, so the token is not left in the checkout's git config for later steps to find.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # The commit the v4 tag pointed to when this was pinned: a tag can be moved to other code, a commit cannot.
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
-      - uses: actions/setup-node@v4
+      # Every action is pinned to the commit its release tag pointed to: a tag can be moved to other code, a commit cannot.
+      # Dependabot's github-actions updates move the commit and the version comment together.
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .node-version
           cache: pnpm
@@ -59,11 +60,11 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .node-version
           cache: pnpm
@@ -77,7 +78,7 @@ jobs:
           PWA_SERVICE_WORKER: "off"
       # GitHub Pages serves 404.html for unknown paths, which lets deep links like /moncsy/tetelek load the SPA.
       - run: cp apps/web/dist/index.html apps/web/dist/404.html
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: apps/web/dist
 
@@ -96,4 +97,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
