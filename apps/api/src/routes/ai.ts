@@ -31,7 +31,7 @@ export function sniffMime(data: Buffer, declared: string, filename: string): str
 }
 
 export async function aiRoutes(app: FastifyInstance, { repo, ai, config }: AppDeps): Promise<void> {
-  app.post("/receipts/scan", async (req) => {
+  app.post("/receipts/scan", { config: { readOnly: true } }, async (req) => {
     const file = await readUpload(req);
     const mime = sniffMime(file.data, file.mimetype, file.filename);
     if (!ACCEPTED.has(mime)) {
@@ -49,7 +49,7 @@ export async function aiRoutes(app: FastifyInstance, { repo, ai, config }: AppDe
     return scanReceipt(ai, await repo.listCategories(), image.toString("base64"), mime);
   });
 
-  app.post("/ai/analyze", async (req) => {
+  app.post("/ai/analyze", { config: { readOnly: true } }, async (req) => {
     const body = parseOrThrow(analyzeRequestSchema, req.body, "analyze request");
     const txs = await repo.listTransactions({ from: body.from, to: body.to });
     if (body.scope === "products") {
