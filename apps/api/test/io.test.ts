@@ -134,7 +134,7 @@ describe("import errors", () => {
       });
       const items = Array.from({ length: 400 }, () => ({ name: "x".repeat(500), quantity: 1, unitPrice: 1, total: 1 }));
       const payload = { categories: [], transactions: [row("before"), row("too big", { items }), row("after-1"), row("after-2")] };
-      await expect(applyImport(repo, payload)).rejects.toThrow(/rolled back by SQLite after an earlier error: database or disk is full/);
+      await expect(applyImport(repo, payload)).rejects.toThrow(/nothing was imported: database or disk is full/);
       await db.get("PRAGMA max_page_count = 1073741823");
       expect(await repo.listTransactions()).toEqual([]);
       db.close();

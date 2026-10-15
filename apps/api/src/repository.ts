@@ -27,6 +27,25 @@ interface TransactionRow {
   external_id: string | null;
 }
 
+/** SQLite's SQLITE_CONSTRAINT_UNIQUE, as node:sqlite reports it. */
+const SQLITE_CONSTRAINT_UNIQUE = 2067;
+
+/**
+ * Two requests can both pass the externalId check before either inserts; the UNIQUE index then refuses the second,
+ * and that is the same conflict the check reports, not a server error.
+ */
+async function externalIdConflict<T>(externalId: string | null | undefined, write: () => Promise<T>): Promise<T> {
+  try {
+    return await write();
+  } catch (e) {
+    const err = e as Error & { errcode?: number };
+    if (externalId && err.errcode === SQLITE_CONSTRAINT_UNIQUE && err.message.includes("transactions.external_id")) {
+      throw new HttpError(409, `A transaction with externalId "${externalId}" already exists`);
+    }
+    throw e;
+  }
+}
+
 export function toIso(date: string): string {
   const t = Date.parse(date);
   if (Number.isNaN(t)) throw badRequest(`Invalid date "${date}"`);
@@ -113,6 +132,7 @@ export class Repository {
     if (patch.parentId !== undefined) {
       if (patch.parentId === id) throw badRequest("parentId: a category cannot be its own parent");
       await this.assertCategory(patch.parentId, "parentId");
+      await this.assertNoParentLoop(id, patch.parentId);
     }
     const next = { ...cur, ...stripUndefined(patch) };
     await this.db.run("UPDATE categories SET name = ?, icon = ?, color = ?, parent_id = ?, budget = ? WHERE id = ?", [
@@ -124,6 +144,17 @@ export class Repository {
       id,
     ]);
     return (await this.getCategory(id))!;
+  }
+
+  /** Walks up from parentId; reaching id means the new parent is one of id's own descendants. */
+  private async assertNoParentLoop(id: string, parentId: string | null | undefined): Promise<void> {
+    const seen = new Set<string>();
+    for (let at = parentId; at != null; at = (await this.getCategory(at))?.parentId) {
+      if (at === id) throw badRequest(`parentId: "${parentId}" is inside this category, so it would make a loop`);
+      // A loop already stored (from before this check existed) must not hang the request.
+      if (seen.has(at)) return;
+      seen.add(at);
+    }
   }
 
   async deleteCategory(id: string): Promise<void> {
@@ -182,7 +213,7 @@ export class Repository {
       throw new HttpError(409, `A transaction with externalId "${input.externalId}" already exists`);
     }
     const id = opts.id ?? randomUUID();
-    await this.db.run(
+    await externalIdConflict(input.externalId, () => this.db.run(
       `INSERT INTO transactions (id, amount, currency, date, merchant, note, category_id, source, items, external_id)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
@@ -197,7 +228,7 @@ export class Repository {
         input.items ? JSON.stringify(input.items) : null,
         input.externalId ?? null,
       ],
-    );
+    ));
     return (await this.getTransaction(id))!;
   }
 
@@ -211,7 +242,7 @@ export class Repository {
     const p = stripUndefined(patch);
     const note = "note" in p ? p.note : cur.note ?? null;
     const items = "items" in p ? p.items : cur.items ?? null;
-    await this.db.run(
+    await externalIdConflict(patch.externalId, () => this.db.run(
       `UPDATE transactions SET amount = ?, currency = ?, date = ?, merchant = ?, note = ?, category_id = ?, source = ?, items = ?, external_id = ?
        WHERE id = ?`,
       [
@@ -226,7 +257,7 @@ export class Repository {
         "externalId" in p ? (p.externalId ?? null) : (cur.externalId ?? null),
         id,
       ],
-    );
+    ));
     return (await this.getTransaction(id))!;
   }
 
