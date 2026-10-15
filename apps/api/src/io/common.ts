@@ -1,5 +1,6 @@
 import { z } from "zod";
-import type { Category, Transaction } from "@et/shared";
+import { DEFAULT_CATEGORIES, type Category, type Transaction } from "@et/shared";
+import { HttpError } from "../errors.js";
 import type { Repository } from "../repository.js";
 import { categoryCreateSchema, transactionCreateSchema } from "../schemas.js";
 
@@ -75,15 +76,29 @@ const importTransactionSchema = transactionCreateSchema.extend({
   ),
 });
 
+/** Only these can be built in: anything else marked so could never be deleted (deleteCategory refuses built-ins). */
+const BUILT_IN_IDS = new Set<string>(DEFAULT_CATEGORIES.map((c) => c.id));
+
 const fmtIssues = (e: z.ZodError) => e.issues.map((i) => `${i.path.join(".") || "(row)"}: ${i.message}`).join("; ");
 
 /**
  * Applies an import. Rows are independent: a bad row lands in errors[] and the rest still import.
  * Existing ids / externalIds are skipped (never overwritten), so re-importing an export is a no-op.
  * imported / skipped count category and transaction rows together.
+ * A failure of the database itself is not a bad row: it rolls the whole import back, and the error says that nothing was imported.
  */
 export async function applyImport(repo: Repository, payload: ImportPayload): Promise<ImportResult> {
   const res: ImportResult = { imported: 0, skipped: 0, errors: [] };
+  try {
+    await importRows(repo, payload, res);
+  } catch (e) {
+    if (e instanceof HttpError) throw e;
+    throw new HttpError(500, `The import failed and was rolled back, so nothing was imported: ${(e as Error).message}`, undefined, { cause: e });
+  }
+  return res;
+}
+
+async function importRows(repo: Repository, payload: ImportPayload, res: ImportResult): Promise<void> {
   await repo.withTx(async (repo) => {
     const parents: [string, string, string][] = [];
     for (const rec of payload.categories) {
@@ -97,18 +112,27 @@ export async function applyImport(repo: Repository, payload: ImportPayload): Pro
         res.skipped++;
         continue;
       }
+      const builtIn = !c.isCustom && c.id !== undefined && BUILT_IN_IDS.has(c.id);
+      if (!c.isCustom && !builtIn) res.errors.push(`${rec.where}: only the default categories are built in; imported as a custom category`);
       const created = await repo.createCategory(
         { name: c.name, icon: c.icon, color: c.color, budget: c.budget, parentId: null },
-        { id: c.id, isCustom: c.isCustom },
+        { id: c.id, isCustom: !builtIn },
       );
       if (c.parentId) parents.push([created.id, c.parentId, rec.where]);
       res.imported++;
     }
     for (const [id, parentId, where] of parents) {
-      // updateCategory refuses a self-parent by throwing, which would roll back the whole import.
+      // updateCategory refuses a self-parent or a loop by throwing, which uncaught would roll back the whole import.
       if (parentId === id) res.errors.push(`${where}: a category cannot be its own parent; imported without parent`);
       else if (!(await repo.getCategory(parentId))) res.errors.push(`${where}: parentId "${parentId}" not found; imported without parent`);
-      else await repo.updateCategory(id, { parentId });
+      else {
+        try {
+          await repo.updateCategory(id, { parentId });
+        } catch (e) {
+          if (!(e instanceof HttpError)) throw e;
+          res.errors.push(`${where}: ${e.message}; imported without parent`);
+        }
+      }
     }
 
     const byName = new Map((await repo.listCategories()).map((c) => [c.name.toLocaleLowerCase("hu"), c.id] as const));
@@ -139,9 +163,10 @@ export async function applyImport(repo: Repository, payload: ImportPayload): Pro
         await repo.createTransaction(t, { id });
         res.imported++;
       } catch (e) {
-        res.errors.push(`${rec.where}: ${(e as Error).message}`);
+        // A refused row is reported and the rest go on; anything else is the database failing, and ends the import.
+        if (!(e instanceof HttpError)) throw e;
+        res.errors.push(`${rec.where}: ${e.message}`);
       }
     }
   });
-  return res;
 }

@@ -71,7 +71,7 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
 
   app.setErrorHandler((err: Error & { statusCode?: number; code?: string }, req, reply) => {
     const status = err instanceof HttpError ? err.statusCode : (err.statusCode ?? 500);
-    if (status >= 500 && !(err instanceof HttpError)) req.log.error(err);
+    if (status >= 500) req.log.error(err);
     const body: Record<string, unknown> = {
       error: status >= 500 && !(err instanceof HttpError) ? "Internal server error" : err.message,
     };
