@@ -27,7 +27,7 @@ function mappingField(raw: string | undefined): StatementMapping | undefined {
 }
 
 export async function statementRoutes(app: FastifyInstance, { repo, ai, config }: AppDeps): Promise<void> {
-  app.post("/statements/parse", async (req) => {
+  app.post("/statements/parse", { config: { readOnly: true } }, async (req) => {
     const file = await readUpload(req);
     const currency = file.fields.currency?.trim();
     if (currency && !/^[A-Za-z]{3}$/.test(currency)) throw badRequest('"currency" must be an ISO 4217 code');

@@ -7,7 +7,7 @@ import { DailyLimitedProvider } from "./ai/quota.js";
 import { BackupScheduler, type BackupConfig } from "./backup.js";
 import { loadConfig, type AppConfig } from "./config.js";
 import { openDb, type DB } from "./db.js";
-import { HttpError } from "./errors.js";
+import { HttpError, messageWithCauses } from "./errors.js";
 import { Repository } from "./repository.js";
 import { createRevolutProvider, type RevolutProvider } from "./revolut/index.js";
 import { aiRoutes } from "./routes/ai.js";
@@ -35,7 +35,15 @@ export interface BuildOptions {
   ai?: AIProvider;
   revolut?: RevolutProvider;
   backup?: BackupConfig | null;
-  logger?: boolean;
+  /** true logs to stdout; a stream receives the same lines instead (tests read them) */
+  logger?: boolean | { stream: NodeJS.WritableStream };
+}
+
+declare module "fastify" {
+  interface FastifyContextConfig {
+    /** the route only reads (an AI call or a preview counts): the backup neither marks the database for it nor uploads after it */
+    readOnly?: boolean;
+  }
 }
 
 /** What the request log keeps of a request: the path without its query string, which can hold search terms and dates (RUN-10). */
@@ -62,7 +70,8 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
   };
 
   // Behind a reverse proxy (Render) the client address is in X-Forwarded-For; TRUST_PROXY_HOPS says how many proxies to trust.
-  const app = Fastify({ logger: opts.logger ? { serializers: { req: requestLogFields } } : false, bodyLimit: 2 * 1024 * 1024, trustProxy: (_addr: string, hop: number) => hop < config.trustProxyHops });
+  const logger = opts.logger ? { serializers: { req: requestLogFields }, ...(typeof opts.logger === "object" ? { stream: opts.logger.stream } : {}) } : false;
+  const app = Fastify({ logger, bodyLimit: 2 * 1024 * 1024, trustProxy: (_addr: string, hop: number) => hop < config.trustProxyHops });
   if (opts.backup) {
     deps.backup = new BackupScheduler(db, opts.backup, { info: (m) => app.log.info(m), error: (m) => app.log.error(m) });
     await deps.backup.init();
@@ -83,7 +92,10 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
 
   app.setErrorHandler((err: Error & { statusCode?: number; code?: string }, req, reply) => {
     const status = err instanceof HttpError ? err.statusCode : (err.statusCode ?? 500);
-    if (status >= 500) req.log.error(err);
+    // An HttpError is a failure the code expected and named (a provider down, a missing setting): one line with its cause
+    // is enough. Anything else is a defect, logged with its stack.
+    if (status >= 500 && err instanceof HttpError) req.log.warn({ status }, messageWithCauses(err));
+    else if (status >= 500) req.log.error(err);
     const body: Record<string, unknown> = {
       error: status >= 500 && !(err instanceof HttpError) ? "Internal server error" : err.message,
     };
@@ -123,25 +135,30 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
       }
       if (deps.backup) {
         const backup = deps.backup;
-        const refused = new WeakSet<FastifyRequest>();
+        /** write requests let in by the hook below, until their answer is sent */
+        const admitted = new WeakSet<FastifyRequest>();
         // While uploads are stopped or failing too long, writes are refused (BackupScheduler.refusal). Reads and the export
         // keep working, so the data can be saved by hand. Registered after the token check, so only the owner learns of it.
         api.addHook("onRequest", async (req, reply) => {
           if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return;
+          // A route that only reads (its config says readOnly) neither marks the database nor sets off an upload.
+          if (req.routeOptions.config.readOnly) return;
           const error = backup.refusal();
           if (error === null) {
-            if (isAuthorized(config, req)) await backup.markDirty();
+            if (isAuthorized(config, req)) {
+              admitted.add(req);
+              await backup.beginWrite();
+            }
             return;
           }
-          refused.add(req);
           return reply.status(503).send({ error });
         });
-        // Anything but a read may have written; the scheduler uploads only if the database actually changed.
+        // Anything else may have written; the scheduler uploads only if the database actually changed.
         // A request refused for the token or the backup wrote nothing: letting it touch would let anyone keep postponing
         // the backup, and a refused write would set off an upload attempt each time.
         // onSend, not onResponse: onResponse never runs when the client went away before the response, though the write stands.
         api.addHook("onSend", async (req, _reply, payload) => {
-          if (req.method !== "GET" && req.method !== "HEAD" && req.method !== "OPTIONS" && isAuthorized(config, req) && !refused.has(req)) backup.touch();
+          if (admitted.delete(req)) backup.endWrite();
           return payload;
         });
       }

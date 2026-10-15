@@ -429,6 +429,8 @@ export class BackupScheduler {
   private historyMax = 0;
   /** META_DIRTY is "1" in the database */
   private dirty = false;
+  /** write requests let in and not yet answered: one may write after an upload has finished, so none may be open to clear the mark */
+  private openWrites = 0;
   /** after a failed upload, no new attempt before this time, however many writes arrive */
   private retryAt: number | null = null;
   private closed = false;
@@ -457,12 +459,23 @@ export class BackupScheduler {
     }
   }
 
+  /** Called before a request that may write; endWrite() must follow once it is answered, whatever the outcome. */
+  async beginWrite(): Promise<void> {
+    this.openWrites++;
+    await this.markDirty();
+  }
+
+  /** The request beginWrite() let in has been answered; whatever it wrote is uploaded after the debounce. */
+  endWrite(): void {
+    this.openWrites--;
+    this.touch();
+  }
+
   /**
-   * Called before a request that may write. Records in the database that a write is about to happen, so the fact survives
-   * a crash or a restart before the upload. The record itself is not counted as a change, so a request that then writes
-   * nothing still uploads nothing.
+   * Records in the database that a write is about to happen, so the fact survives a crash or a restart before the upload.
+   * The record itself is not counted as a change, so a request that then writes nothing still uploads nothing.
    */
-  async markDirty(): Promise<void> {
+  private async markDirty(): Promise<void> {
     if (this.dirty || this.closed) return;
     const delta = await this.db.tx(async (t) => {
       const before = await this.totalChanges(t);
@@ -551,8 +564,8 @@ export class BackupScheduler {
       const before = await this.totalChanges(t);
       await setMeta(t, META_GENERATION, String(generation));
       await setMeta(t, META_AT, at);
-      // A write made during the upload is not in it, so it keeps the mark.
-      const clean = before === changes;
+      // A write made during the upload is not in it, and a request still open may write after it: either keeps the mark.
+      const clean = before === changes && this.openWrites === 0;
       if (clean) await setMeta(t, META_DIRTY, "0");
       return { delta: (await this.totalChanges(t)) - before, clean };
     });
