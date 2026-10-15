@@ -32,14 +32,16 @@ jobs:
         run: pnpm --filter @et/api test
       - name: API build
         run: pnpm --filter @et/api build
-      # The build output is what production runs; start it once and require /api/health to answer.
-      - name: API smoke test (built dist starts and serves /api/health)
-        working-directory: apps/api
+      # The build output is what production runs; start it with render.yaml's own startCommand, read from there so the
+      # two cannot drift apart (architect's FA-01), and require /api/health to answer.
+      - name: API smoke test (built dist, started as render.yaml starts it, serves /api/health)
         env:
           PORT: "8787"
           DB_PATH: ${{ runner.temp }}/smoke.db
         run: |
-          setsid pnpm start > "$RUNNER_TEMP/smoke.log" 2>&1 &
+          start=$(sed -n 's/^ *startCommand: //p' render.yaml)
+          test -n "$start"
+          setsid sh -c "$start" > "$RUNNER_TEMP/smoke.log" 2>&1 &
           pid=$!
           ok=""
           for _ in $(seq 1 30); do

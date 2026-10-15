@@ -13,7 +13,7 @@ Copy `.env.example` to `.env`. The server loads `./.env` from its working direct
 
 ## Storage
 
-The API uses SQLite through **`node:sqlite`**, which is built into Node, rather than `better-sqlite3`. pnpm 10 blocks dependency build scripts unless they are allow-listed in the workspace root config, so `better-sqlite3`'s native binary never gets built. `node:sqlite` needs no native build. Node 22 prints an `ExperimentalWarning` for it and Node 24.21 does not; the `dev`/`start` scripts suppress that warning either way.
+The API uses SQLite through **`node:sqlite`**, which is built into Node, rather than `better-sqlite3`. pnpm 10 blocks dependency build scripts unless they are allow-listed in the workspace root config, so `better-sqlite3`'s native binary never gets built. `node:sqlite` needs no native build. Node 24.21 (the version this repository pins) prints no `ExperimentalWarning` for it, so nothing suppresses one.
 
 Everything above the database talks to the small async `DB` interface in `db.ts` (`all`, `get`, `run`, `exec`, `tx`, `close`), so another engine can be dropped in without touching the repository. `tx()` runs one transaction at a time; queries outside it wait for it to finish.
 
@@ -109,7 +109,7 @@ For hosts whose disk is wiped on restart (Render's free plan), set `BACKUP_GITHU
 
 Conventions:
 
-- **Errors.** Every error returns `{ error: string, details?: unknown }`. The status codes are 400 (validation), 401 (missing or wrong token), 404, 409 (conflict, built-in category), 413 (upload > 10 MB, or an XLSX file too large to read, see below), 415 (wrong file type), 422 (product analysis without receipt lines), 429 (too many wrong tokens), 501 (open-banking sync), 502 (AI provider or Revolut upstream failure, or invalid AI JSON) and 503 (Revolut business-api without a token, or XLSX reading switched off by `NODE_OPTIONS`, see below).
+- **Errors.** Every error returns `{ error: string, details?: unknown }`. The status codes are 400 (validation), 401 (missing or wrong token), 404, 409 (conflict, built-in category), 413 (upload > 10 MB, or an XLSX file too large to read, see below), 415 (wrong file type), 422 (product analysis without receipt lines, or an AI answer cut off at its token limit), 429 (too many wrong tokens, or the day's AI calls under `AI_DAILY_LIMIT` used up), 500 (server error), 501 (open-banking sync), 502 (AI provider or Revolut upstream failure, or invalid AI JSON; the provider's own text goes to the server log, not into the answer) and 503 (writes while the backup has stopped or has failed for more than 5 minutes, Revolut business-api without a token, or XLSX reading switched off by `NODE_OPTIONS`, see below). Every answer carries `Cache-Control: no-store`, `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`.
 - **Dates.** Dates are stored as full ISO 8601 UTC strings. Any parseable date is accepted on input, and `2026-10-12` becomes `2026-10-12T00:00:00.000Z`. A date-only `to` covers the whole day.
 - **`GET /summary`.** Amounts in different currencies are never added together. The summary covers `currency`, or else the most common currency in the range, or else `DEFAULT_CURRENCY`. `income` and `expense` are non-negative magnitudes. `byCategory[].total` is the signed sum (negative = spending), largest spend first. An income category has a positive total.
 - **Notes.** An empty `note` is stored as no note.

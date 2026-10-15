@@ -13,17 +13,20 @@ export function parseModelJson<T extends z.ZodType>(provider: string, raw: strin
   try {
     data = JSON.parse(text);
   } catch (e) {
-    throw new HttpError(502, `AI provider "${provider}" returned invalid JSON: ${(e as Error).message}`, {
-      raw: raw.slice(0, 1000),
+    // The model's raw answer (and the parser's message, which quotes it) goes to the server log only (SEC-API-09).
+    throw new HttpError(502, `AI provider "${provider}" returned invalid JSON`, undefined, {
+      cause: new Error(`${(e as Error).message}; the answer: ${raw.slice(0, 1000)}`),
     });
   }
   const r = schema.safeParse(data);
   if (!r.success) {
     const issues = r.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`);
-    throw new HttpError(502, `AI provider "${provider}" returned JSON that does not match the expected shape: ${issues.join("; ")}`, {
-      issues,
-      raw: raw.slice(0, 1000),
-    });
+    throw new HttpError(
+      502,
+      `AI provider "${provider}" returned JSON that does not match the expected shape: ${issues.join("; ")}`,
+      { issues },
+      { cause: new Error(`the answer: ${raw.slice(0, 1000)}`) },
+    );
   }
   return r.data;
 }

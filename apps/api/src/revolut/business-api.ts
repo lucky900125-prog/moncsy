@@ -85,7 +85,11 @@ export class BusinessApiRevolutProvider implements RevolutProvider {
       // Until then the 40-minute access token in REVOLUT_BUSINESS_TOKEN has to be replaced manually.
       throw new HttpError(502, "Revolut Business API rejected the token (401). Access tokens expire after 40 minutes; refresh it.");
     }
-    if (!res.ok) throw new HttpError(502, `Revolut Business API ${path} returned HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+    if (!res.ok) {
+      // Revolut's own text goes to the server log (as the cause), not to the client (SEC-API-09).
+      const cause = new Error(`Revolut answered: ${(await res.text()).slice(0, 2000)}`);
+      throw new HttpError(502, `Revolut Business API ${path} returned HTTP ${res.status}`, undefined, { cause });
+    }
     return (await res.json()) as T;
   }
 

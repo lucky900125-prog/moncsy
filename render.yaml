@@ -24,8 +24,12 @@ services:
         - pnpm-workspace.yaml
         - .npmrc
     # pnpm is pinned to the version in package.json "packageManager"; the lockfile needs pnpm 9 or newer.
-    buildCommand: npx --yes pnpm@10.28.0 install --frozen-lockfile && npx --yes pnpm@10.28.0 --filter @et/api build
-    startCommand: cd apps/api && node --conditions=et-dist --disable-warning=ExperimentalWarning dist/index.js
+    # Only the API and what it depends on (about 191 MB instead of the whole workspace's 849 MB), each package with its
+    # own dependencies (architect's FA-02).
+    buildCommand: npx --yes pnpm@10.28.0 install --frozen-lockfile --filter "@et/api..." --config.node-linker=isolated && npx --yes pnpm@10.28.0 --filter @et/api build
+    # CI's smoke test starts the API with exactly this line (ci.yml). node runs directly, not through npm or a shell that
+    # stays in between: SIGTERM has to reach it, or the last backup upload on shutdown never runs.
+    startCommand: cd apps/api && exec node --conditions=et-dist dist/index.js
     healthCheckPath: /api/health
     # Node: the root .node-version file when there is one, else Render's default (24.x for services created after
     # 2026-09-17, render.com/docs/node-version). NODE_VERSION would override the file, so it is not set here.
