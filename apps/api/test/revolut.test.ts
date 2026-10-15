@@ -8,6 +8,8 @@ import { parseStatementCsv, parseStatementXlsx, revolutDate, statementExternalId
 import { OpenBankingRevolutProvider } from "../src/revolut/open-banking.js";
 import { multipart, testApp } from "./helpers.js";
 
+const TZ = "Europe/Budapest";
+
 const CSV = `﻿Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance
 CARD_PAYMENT,Current,2026-10-01 08:15:42,2026-10-02 09:01:10,Spar,-4785.00,0.00,HUF,COMPLETED,120215.00
 CARD_PAYMENT,Current,2026-10-02 12:30:00,2026-10-03 10:00:00,Wolt,-6490.00,0.00,HUF,COMPLETED,113725.00
@@ -24,7 +26,7 @@ CARD_PAYMENT,Current,2026-10-10 13:00:00,2026-10-10 13:00:00,Broken row,abc,0.00
 
 describe("Revolut statement parsing", () => {
   it("parses the app's CSV export, skipping exchanges and non-completed rows", async () => {
-    const { rows, errors } = parseStatementCsv(CSV);
+    const { rows, errors } = parseStatementCsv(CSV, TZ);
     expect(rows).toHaveLength(10);
     expect(errors).toEqual(['Row 12: invalid Amount "abc"']);
     expect(rows[0]).toMatchObject({ type: "CARD_PAYMENT", startedDate: "2026-10-01T06:15:42.000Z", completedDate: "2026-10-02T07:01:10.000Z", amount: -4785, currency: "HUF" });
@@ -53,18 +55,18 @@ describe("Revolut statement parsing", () => {
   });
 
   it("treats a header-only statement as empty, not as broken rows", async () => {
-    expect(parseStatementCsv("Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance\n")).toEqual({ rows: [], errors: [] });
+    expect(parseStatementCsv("Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance\n", TZ)).toEqual({ rows: [], errors: [] });
     const wb = new ExcelJS.Workbook();
     wb.addWorksheet("Statement").addRow(["Type", "Product", "Started Date", "Completed Date", "Description", "Amount", "Fee", "Currency", "State", "Balance"]);
-    expect(await parseStatementXlsx(Buffer.from(await wb.xlsx.writeBuffer()))).toEqual({ rows: [], errors: [] });
-    expect(() => parseStatementCsv("")).toThrow(/Not a Revolut statement/);
+    expect(await parseStatementXlsx(Buffer.from(await wb.xlsx.writeBuffer()), TZ)).toEqual({ rows: [], errors: [] });
+    expect(() => parseStatementCsv("", TZ)).toThrow(/Not a Revolut statement/);
   });
 
   it("reads a description with a stray quote instead of failing the whole file", async () => {
     const csv = `Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance
 CARD_PAYMENT,Current,2026-10-01 08:15:42,2026-10-02 09:01:10,Spar 5" cable,-4785.00,0.00,HUF,COMPLETED,120215.00
 `;
-    const { rows, errors } = parseStatementCsv(csv);
+    const { rows, errors } = parseStatementCsv(csv, TZ);
     expect(errors).toEqual([]);
     expect(rows.map((r) => r.description)).toEqual(['Spar 5" cable']);
 
@@ -81,7 +83,7 @@ CARD_PAYMENT,Current,2026-10-01 08:15:42,2026-10-02 09:01:10,Spar 5" cable,-4785
 CARD_PAYMENT;Current;2026. 10. 01. 8:15;2026. 10. 02. 9:01;Spar;-4785;0;HUF;COMPLETED;120215
 CARD_PAYMENT;Current;2026-10-03 12:00:00;2026-10-03 12:00:00;Lidl;-12,5;0;EUR;COMPLETED;87,5
 `;
-    const { rows, errors } = parseStatementCsv(csv);
+    const { rows, errors } = parseStatementCsv(csv, TZ);
     expect(errors).toEqual([]);
     expect(rows.map((r) => [r.description, r.amount, r.completedDate])).toEqual([
       ["Spar", -4785, "2026-10-02T07:01:00.000Z"],
@@ -154,9 +156,9 @@ describe("POST /api/revolut/import-statement", () => {
 
 describe("revolutDate", () => {
   it("reads statement wall-clock times as Europe/Budapest, DST-aware", async () => {
-    expect(revolutDate("2026-10-31 23:30:00")).toBe("2026-10-31T22:30:00.000Z");
-    expect(revolutDate("2026-07-01 12:00:00")).toBe("2026-07-01T10:00:00.000Z");
-    expect(revolutDate(new Date(Date.UTC(2026, 6, 1, 12, 0, 0)))).toBe("2026-07-01T10:00:00.000Z");
+    expect(revolutDate("2026-10-31 23:30:00", TZ)).toBe("2026-10-31T22:30:00.000Z");
+    expect(revolutDate("2026-07-01 12:00:00", TZ)).toBe("2026-07-01T10:00:00.000Z");
+    expect(revolutDate(new Date(Date.UTC(2026, 6, 1, 12, 0, 0)), TZ)).toBe("2026-07-01T10:00:00.000Z");
     expect(revolutDate("2026-07-01 12:00:00", "UTC")).toBe("2026-07-01T12:00:00.000Z");
   });
 });

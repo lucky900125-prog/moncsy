@@ -97,7 +97,7 @@ async function readStatement(
     // The statement is the sheet with the most filled rows; banks sometimes add a cover sheet.
     const sheet = busiestSheet(await readWorkbook(file.data, "Not a readable XLSX file"));
     if (!sheet) throw badRequest("The XLSX file has no worksheets");
-    if (isRevolutHeader(sheet.rows[0] ?? [])) return { format: "revolut", ...empty, ...fromRevolut(parseStatementSheet(sheet.rows)) };
+    if (isRevolutHeader(sheet.rows[0] ?? [])) return { format: "revolut", ...empty, ...fromRevolut(parseStatementSheet(sheet.rows, opts.timeZone)) };
     return { format: "xlsx", ...parseTabular(sheet.rows.map((r) => r.map(tabularCell)), opts) };
   }
 
@@ -121,7 +121,7 @@ async function readStatement(
   } catch (e) {
     throw badRequest(`Not a readable CSV file: ${(e as Error).message}`);
   }
-  if (isRevolutHeader(rows[0] ?? [])) return { format: "revolut", ...empty, ...fromRevolut(parseStatementCsv(text, delimiter)) };
+  if (isRevolutHeader(rows[0] ?? [])) return { format: "revolut", ...empty, ...fromRevolut(parseStatementCsv(text, opts.timeZone, delimiter)) };
   return { format: "csv", ...parseTabular(rows, opts) };
 }
 

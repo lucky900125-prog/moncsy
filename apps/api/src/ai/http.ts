@@ -20,15 +20,17 @@ export async function postJson(
     throw new HttpError(502, `AI provider "${provider}" request failed: ${(e as Error).message}`);
   }
   const text = await res.text();
-  // The provider's own text goes to the server log (as the cause), not to the client (SEC-API-09).
-  const answered = { cause: new Error(`${provider} answered: ${text.slice(0, 2000)}`) };
   if (!res.ok) {
-    throw new HttpError(502, `AI provider "${provider}" returned HTTP ${res.status} (${providerHint(res.status)})`, undefined, answered);
+    // The provider's own error text goes to the server log (as the cause), not to the client (SEC-API-09).
+    const cause = new Error(`${provider} answered: ${text.slice(0, 500)}`);
+    throw new HttpError(502, `AI provider "${provider}" returned HTTP ${res.status} (${providerHint(res.status)})`, undefined, { cause });
   }
   try {
     return JSON.parse(text);
-  } catch {
-    throw new HttpError(502, `AI provider "${provider}" returned a body that is not JSON`, undefined, answered);
+  } catch (e) {
+    // A 2xx body can carry the model's answer, so only its length is logged.
+    const cause = new Error(`${(e as Error).name}; the body was ${text.length} characters`);
+    throw new HttpError(502, `AI provider "${provider}" returned a body that is not JSON`, undefined, { cause });
   }
 }
 
