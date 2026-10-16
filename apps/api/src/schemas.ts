@@ -78,6 +78,9 @@ export const analyzeRequestSchema = z.object({
   to: isoDate,
   question: z.string().max(2000).optional(),
   scope: z.enum(["spending", "products"]).default("spending"),
+  // Checked against the server's providers by AIRegistry.pick, which says what is offered.
+  provider: z.string().max(40).optional(),
+  model: z.string().max(200).optional(),
   products: z
     .object({
       q: z.string().trim().max(120).optional(),

@@ -34,7 +34,7 @@ export async function statementRoutes(app: FastifyInstance, { repo, ai, config }
     return parseStatementFile(
       file,
       { mapping: mappingField(file.fields.mapping), currency: currency || undefined, defaultCurrency: config.defaultCurrency, timeZone: config.statementTz },
-      ai,
+      ai.pick(file.fields.provider, file.fields.model),
     );
   });
 

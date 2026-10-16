@@ -2,8 +2,8 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
-import { createAIProvider, type AIProvider } from "./ai/index.js";
-import { DailyLimitedProvider } from "./ai/quota.js";
+import type { AIProvider } from "./ai/index.js";
+import { AIRegistry } from "./ai/registry.js";
 import { BackupScheduler, type BackupConfig } from "./backup.js";
 import { loadConfig, type AppConfig } from "./config.js";
 import { openDb, type DB } from "./db.js";
@@ -23,7 +23,8 @@ export interface AppDeps {
   config: AppConfig;
   db: DB;
   repo: Repository;
-  ai: AIProvider;
+  /** the providers a request may pick; ai.default when it names none */
+  ai: AIRegistry;
   revolut: RevolutProvider;
   /** null when no off-site backup is configured */
   backup: BackupScheduler | null;
@@ -32,6 +33,7 @@ export interface AppDeps {
 export interface BuildOptions {
   config?: Partial<AppConfig>;
   db?: DB;
+  /** the default provider's adapter, instead of one made from config */
   ai?: AIProvider;
   revolut?: RevolutProvider;
   backup?: BackupConfig | null;
@@ -64,7 +66,7 @@ export async function buildApp(opts: BuildOptions = {}): Promise<FastifyInstance
     config,
     db,
     repo,
-    ai: new DailyLimitedProvider(opts.ai ?? createAIProvider(config.ai), config.ai.dailyLimit),
+    ai: new AIRegistry(config.ai, opts.ai),
     revolut: opts.revolut ?? createRevolutProvider(config.revolut, repo),
     backup: null,
   };

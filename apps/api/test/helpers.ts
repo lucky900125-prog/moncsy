@@ -14,10 +14,14 @@ export async function testApp(opts: BuildOptions = {}) {
   });
 }
 
-export function multipart(filename: string, contentType: string, data: Buffer | string, field = "file") {
+/** fields go before the file, as the routes read only those (app.ts readUpload). */
+export function multipart(filename: string, contentType: string, data: Buffer | string, field = "file", fields: Record<string, string> = {}) {
   const boundary = `----et${randomBytes(8).toString("hex")}`;
+  const before = Object.entries(fields)
+    .map(([k, v]) => `--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`)
+    .join("");
   const head = Buffer.from(
-    `--${boundary}\r\nContent-Disposition: form-data; name="${field}"; filename="${filename}"\r\nContent-Type: ${contentType}\r\n\r\n`,
+    `${before}--${boundary}\r\nContent-Disposition: form-data; name="${field}"; filename="${filename}"\r\nContent-Type: ${contentType}\r\n\r\n`,
   );
   const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
   return {
