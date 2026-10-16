@@ -28,13 +28,13 @@ afterEach(() => {
 
 describe("configuration (BE-6)", () => {
   it("refuses an unknown STATEMENT_TZ at start instead of failing every statement later", () => {
-    expect(() => loadConfig({ STATEMENT_TZ: "Mars/Olympus" })).toThrow(/Invalid STATEMENT_TZ "Mars\/Olympus"/);
-    expect(loadConfig({ STATEMENT_TZ: "Europe/Vienna" }).statementTz).toBe("Europe/Vienna");
+    expect(() => loadConfig({ AI_PROVIDER: "mock", STATEMENT_TZ: "Mars/Olympus" })).toThrow(/Invalid STATEMENT_TZ "Mars\/Olympus"/);
+    expect(loadConfig({ AI_PROVIDER: "mock", STATEMENT_TZ: "Europe/Vienna" }).statementTz).toBe("Europe/Vienna");
   });
 
   it("refuses a DEFAULT_CURRENCY that is not a three-letter code", () => {
-    expect(() => loadConfig({ DEFAULT_CURRENCY: "forint" })).toThrow(/Invalid DEFAULT_CURRENCY "forint"/);
-    expect(loadConfig({ DEFAULT_CURRENCY: "eur" }).defaultCurrency).toBe("EUR");
+    expect(() => loadConfig({ AI_PROVIDER: "mock", DEFAULT_CURRENCY: "forint" })).toThrow(/Invalid DEFAULT_CURRENCY "forint"/);
+    expect(loadConfig({ AI_PROVIDER: "mock", DEFAULT_CURRENCY: "eur" }).defaultCurrency).toBe("EUR");
   });
 });
 
@@ -45,14 +45,14 @@ describe("backup on a disk that survives a restart", () => {
     vi.stubGlobal("fetch", (async (url: string, init?: RequestInit) =>
       !tokenWorks && init?.method === "PUT" ? new Response("Bad credentials", { status: 401 }) : gh.fetchImpl(url, init)) as typeof fetch);
     const dbPath = tempDb();
-    const first = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath } });
+    const first = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({ AI_PROVIDER: "mock" }), dbPath } });
     await first.inject({ method: "POST", url: "/api/categories", payload: { name: "Mentetlen", icon: "x", color: "#123456" } });
     await first.close();
     expect(gh.state.puts).toBe(0);
 
     // The owner fixes the token and restarts on the same disk, without writing anything new.
     tokenWorks = true;
-    const second = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath } });
+    const second = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({ AI_PROVIDER: "mock" }), dbPath } });
     await second.deps.backup!.flush();
     expect(gh.state.puts).toBe(1);
     expect(decryptBlob(gh.state.content!, key).data.includes(Buffer.from("Mentetlen"))).toBe(true);

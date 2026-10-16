@@ -1,9 +1,20 @@
 import { loadEnvFiles } from "./env-files.js";
 
+function refuseToStart(err: unknown): never {
+  console.error(`moncsy API did not start: ${(err as Error).message}`);
+  process.exit(1);
+}
+
 // ./.env, then the repository root's .env, when present; real environment variables take precedence.
-const envLoaded = loadEnvFiles();
+let envLoaded: string[];
+try {
+  envLoaded = loadEnvFiles();
+} catch (err) {
+  refuseToStart(err);
+}
 
 const { buildApp } = await import("./app.js");
+const { createAIProvider } = await import("./ai/index.js");
 const { assertSafeExposure, loadConfig } = await import("./config.js");
 const { loadBackupConfig, restoreIfMissing } = await import("./backup.js");
 
@@ -11,18 +22,20 @@ const { loadBackupConfig, restoreIfMissing } = await import("./backup.js");
 // starts an empty database that the next backup would then upload over the good copy.
 let startup: { warning: string | null; restored: string | null };
 let backup: ReturnType<typeof loadBackupConfig>;
+let ai: ReturnType<typeof createAIProvider>;
 try {
   const config = loadConfig();
+  // A provider without its key throws here, with the reason, instead of as a stack trace from buildApp.
+  ai = createAIProvider(config.ai);
   const warning = assertSafeExposure(config);
   backup = loadBackupConfig();
   const restored = backup ? await restoreIfMissing(config.dbPath, backup) : null;
   startup = { warning, restored };
 } catch (err) {
-  console.error(`moncsy API did not start: ${(err as Error).message}`);
-  process.exit(1);
+  refuseToStart(err);
 }
 
-const app = await buildApp({ logger: true, backup });
+const app = await buildApp({ logger: true, backup, ai });
 const { port, host } = app.deps.config;
 app.log.info(envLoaded.length ? `settings read from ${envLoaded.join(", ")}` : "no .env file; settings from the environment only");
 if (startup.warning) app.log.warn(startup.warning);

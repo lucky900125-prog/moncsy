@@ -1,7 +1,12 @@
 import { loadEnvFiles } from "./env-files.js";
 
 // Same settings as the server: ./.env, then the repository root's .env, real environment variables first.
-loadEnvFiles();
+try {
+  loadEnvFiles();
+} catch (err) {
+  console.error(`backup check did not run: ${(err as Error).message}`);
+  process.exit(2);
+}
 
 const { loadBackupConfig, verifyBackup } = await import("./backup.js");
 

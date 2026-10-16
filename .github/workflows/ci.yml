@@ -39,6 +39,8 @@ jobs:
         env:
           PORT: "8787"
           DB_PATH: ${{ runner.temp }}/smoke.db
+          # The API refuses to start without a named AI provider (on Render it is asked for, render.yaml).
+          AI_PROVIDER: mock
         run: |
           start=$(sed -n 's/^ *startCommand: //p' render.yaml)
           test -n "$start"

@@ -37,10 +37,14 @@ function pickAIProvider(env: NodeJS.ProcessEnv): AIProviderName {
     return explicit;
   }
   if (explicit) throw new Error(`Unknown AI_PROVIDER "${explicit}" (expected anthropic|openai|ollama|mock)`);
-  // No explicit provider: use a real one only when a key is present, otherwise the offline mock.
+  // No explicit provider: a key picks it. Without one the API refuses to start rather than answer with the
+  // mock's sample data, which looks like a working AI until someone reads the "mock" badge.
   if (env.ANTHROPIC_API_KEY) return "anthropic";
   if (env.OPENAI_API_KEY) return "openai";
-  return "mock";
+  throw new Error(
+    "No AI provider is set: put AI_PROVIDER=anthropic and ANTHROPIC_API_KEY in .env (or AI_PROVIDER=openai and " +
+      "OPENAI_API_KEY), or AI_PROVIDER=mock for sample answers without a key",
+  );
 }
 
 function pickRevolutMode(env: NodeJS.ProcessEnv): RevolutMode {
@@ -111,6 +115,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const apiKey =
     env.AI_API_KEY ||
     (provider === "anthropic" ? env.ANTHROPIC_API_KEY : provider === "openai" ? env.OPENAI_API_KEY : undefined);
+  const keyNames = ["AI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"].filter((k) => env[k]);
+  if (provider === "mock" && keyNames.length) {
+    throw new Error(`AI_PROVIDER=mock, but ${keyNames.join(", ")} is set: set AI_PROVIDER to the provider of that key, or remove the key`);
+  }
   return {
     port: pickPort(env),
     host: env.HOST || "127.0.0.1",

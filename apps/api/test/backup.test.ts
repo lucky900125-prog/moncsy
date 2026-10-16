@@ -69,7 +69,7 @@ describe("backup and restore through the API", () => {
     const dbPath = tempDb();
     expect(await restoreIfMissing(dbPath, cfg)).toMatch(/no backup .* yet/);
 
-    const app1 = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath } });
+    const app1 = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({ AI_PROVIDER: "mock" }), dbPath } });
     const created = await app1.inject({
       method: "POST",
       url: "/api/transactions",
@@ -95,7 +95,7 @@ describe("backup and restore through the API", () => {
     const dbPath2 = tempDb();
     expect(await restoreIfMissing(dbPath2, cfg)).toMatch(/^restored .* generation 1 /);
     expect(readFileSync(dbPath2).subarray(0, 15).toString()).toBe("SQLite format 3");
-    const app2 = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath: dbPath2 } });
+    const app2 = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({ AI_PROVIDER: "mock" }), dbPath: dbPath2 } });
     expect((await app2.inject("/api/transactions")).json()).toMatchObject([{ merchant: "Spar", amount: -4785 }]);
     // The restored database knows which copy it came from and when that copy was made.
     expect((await app2.inject("/api/backup/status")).json()).toMatchObject({ generation: 1, lastBackupAt: first.lastBackupAt });
@@ -113,7 +113,7 @@ describe("backup and restore through the API", () => {
   it("never overwrites a copy another instance wrote, and says so", async () => {
     const gh = fakeGithub();
     vi.stubGlobal("fetch", gh.fetchImpl);
-    const seed = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath: tempDb() } });
+    const seed = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({ AI_PROVIDER: "mock" }), dbPath: tempDb() } });
     await seed.inject({ method: "POST", url: "/api/categories", payload: { name: "Közös", icon: "x", color: "#123456" } });
     await seed.close();
     const generation1 = gh.state.content!;
@@ -122,7 +122,7 @@ describe("backup and restore through the API", () => {
     const start = async () => {
       const dbPath = tempDb();
       await restoreIfMissing(dbPath, cfg);
-      return buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath } });
+      return buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({ AI_PROVIDER: "mock" }), dbPath } });
     };
     const oldApp = await start();
     const newApp = await start();
@@ -169,12 +169,12 @@ describe("backup and restore through the API", () => {
   it("does not overwrite a remote copy that this database was not restored from", async () => {
     const gh = fakeGithub();
     vi.stubGlobal("fetch", gh.fetchImpl);
-    const first = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath: tempDb() } });
+    const first = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({ AI_PROVIDER: "mock" }), dbPath: tempDb() } });
     await first.inject({ method: "POST", url: "/api/categories", payload: { name: "Eredeti", icon: "x", color: "#123456" } });
     await first.close();
 
     // A second database that never saw the backup, e.g. a leftover local file.
-    const stranger = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath: tempDb() } });
+    const stranger = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({ AI_PROVIDER: "mock" }), dbPath: tempDb() } });
     await stranger.inject({ method: "POST", url: "/api/categories", payload: { name: "Idegen", icon: "x", color: "#123456" } });
     await stranger.deps.backup!.flush();
     expect(stranger.deps.backup!.getStatus()).toMatchObject({ stopped: true, lastError: expect.stringMatching(/was not restored from it/) });
@@ -185,11 +185,11 @@ describe("backup and restore through the API", () => {
   it("refuses every write once the backup has stopped, and still serves reads and the export", async () => {
     const gh = fakeGithub();
     vi.stubGlobal("fetch", gh.fetchImpl);
-    const first = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath: tempDb() } });
+    const first = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({ AI_PROVIDER: "mock" }), dbPath: tempDb() } });
     await first.inject({ method: "POST", url: "/api/categories", payload: { name: "Eredeti", icon: "x", color: "#123456" } });
     await first.close();
 
-    const app = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath: tempDb(), apiToken: "right" } });
+    const app = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({ AI_PROVIDER: "mock" }), dbPath: tempDb(), apiToken: "right" } });
     const headers = { authorization: "Bearer right" };
     const tx = { date: "2026-10-14", amount: -100, currency: "HUF", merchant: "Spar", categoryId: null, source: "manual" };
     const created = await app.inject({ method: "POST", url: "/api/transactions", headers, payload: tx });
@@ -226,7 +226,7 @@ describe("backup and restore through the API", () => {
     const gh = fakeGithub();
     vi.stubGlobal("fetch", gh.fetchImpl);
     const dbPath = tempDb();
-    const app = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath } });
+    const app = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({ AI_PROVIDER: "mock" }), dbPath } });
     await app.inject({ method: "POST", url: "/api/categories", payload: { name: "Teszt", icon: "x", color: "#123456" } });
     await app.close();
 
@@ -245,7 +245,7 @@ describe("backup and restore through the API", () => {
   it("does not start empty when the backup file was deleted, unless told to", async () => {
     const gh = fakeGithub();
     vi.stubGlobal("fetch", gh.fetchImpl);
-    const first = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath: tempDb() } });
+    const first = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({ AI_PROVIDER: "mock" }), dbPath: tempDb() } });
     await first.inject({ method: "POST", url: "/api/categories", payload: { name: "Eredeti", icon: "x", color: "#123456" } });
     await first.close();
     expect(gh.state.commits).toEqual([expect.stringMatching(/^backup 1 /)]);
@@ -259,7 +259,7 @@ describe("backup and restore through the API", () => {
     // The owner really wants to start over: the new copies continue above the old generations.
     const dbPath = tempDb();
     expect(await restoreIfMissing(dbPath, { ...cfg, allowReset: true })).toMatch(/BACKUP_ALLOW_RESET=1, starting with an empty database/);
-    const fresh = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath } });
+    const fresh = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({ AI_PROVIDER: "mock" }), dbPath } });
     await fresh.inject({ method: "POST", url: "/api/categories", payload: { name: "Új kezdet", icon: "x", color: "#123456" } });
     await fresh.close();
     expect(decryptBlob(gh.state.content!, key).generation).toBe(2);
@@ -275,7 +275,7 @@ describe("backup and restore through the API", () => {
     const failing = (async (url: string, init?: RequestInit) =>
       fail && init?.method === "PUT" ? new Response("rate limited", { status: 403 }) : gh.fetchImpl(url, init)) as typeof fetch;
     vi.stubGlobal("fetch", failing);
-    const app = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath: tempDb() } });
+    const app = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({ AI_PROVIDER: "mock" }), dbPath: tempDb() } });
     await app.inject({ method: "POST", url: "/api/categories", payload: { name: "Teszt", icon: "x", color: "#123456" } });
     await app.deps.backup!.flush();
     expect(app.deps.backup!.getStatus()).toMatchObject({ lastBackupAt: null, lastError: expect.stringMatching(/GitHub 403/) });
@@ -297,7 +297,7 @@ describe("backup and restore through the API", () => {
       return gh.fetchImpl(url, init);
     }) as typeof fetch);
     // A long debounce, so only the explicit flushes below upload.
-    app = await buildApp({ ai: new MockProvider(), backup: { ...cfg, debounceMs: 60_000 }, config: { ...loadConfig({}), dbPath: tempDb() } });
+    app = await buildApp({ ai: new MockProvider(), backup: { ...cfg, debounceMs: 60_000 }, config: { ...loadConfig({ AI_PROVIDER: "mock" }), dbPath: tempDb() } });
     await app.inject({ method: "POST", url: "/api/categories", payload: { name: "Előtte", icon: "x", color: "#123456" } });
     await app.deps.backup!.flush();
     expect(gh.state.puts).toBe(1);
@@ -315,13 +315,13 @@ describe("backup and restore through the API", () => {
     const gh = fakeGithub();
     vi.stubGlobal("fetch", gh.fetchImpl);
     // A copy made with another key, e.g. after BACKUP_KEY was changed by mistake.
-    const other = await buildApp({ ai: new MockProvider(), backup: { ...cfg, key: randomBytes(32) }, config: { ...loadConfig({}), dbPath: tempDb() } });
+    const other = await buildApp({ ai: new MockProvider(), backup: { ...cfg, key: randomBytes(32) }, config: { ...loadConfig({ AI_PROVIDER: "mock" }), dbPath: tempDb() } });
     await other.inject({ method: "POST", url: "/api/categories", payload: { name: "Másik kulcs", icon: "x", color: "#123456" } });
     await other.close();
     const theirs = gh.state.content;
     expect(gh.state.puts).toBe(1);
 
-    const app = await buildApp({ ai: new MockProvider(), backup: { ...cfg, debounceMs: 60_000 }, config: { ...loadConfig({}), dbPath: tempDb() } });
+    const app = await buildApp({ ai: new MockProvider(), backup: { ...cfg, debounceMs: 60_000 }, config: { ...loadConfig({ AI_PROVIDER: "mock" }), dbPath: tempDb() } });
     await app.inject({ method: "POST", url: "/api/categories", payload: { name: "Teszt", icon: "x", color: "#123456" } });
     await app.deps.backup!.flush();
     await app.deps.backup!.flush();
@@ -345,7 +345,7 @@ describe("backup and restore through the API", () => {
       }
       return res;
     }) as typeof fetch);
-    const app = await buildApp({ ai: new MockProvider(), backup: { ...cfg, debounceMs: 60_000 }, config: { ...loadConfig({}), dbPath: tempDb() } });
+    const app = await buildApp({ ai: new MockProvider(), backup: { ...cfg, debounceMs: 60_000 }, config: { ...loadConfig({ AI_PROVIDER: "mock" }), dbPath: tempDb() } });
     await app.inject({ method: "POST", url: "/api/categories", payload: { name: "Teszt", icon: "x", color: "#123456" } });
     await app.deps.backup!.flush();
     expect(gh.state.puts).toBe(1);
@@ -365,7 +365,7 @@ describe("backup and restore through the API", () => {
     let failPuts = 1;
     vi.stubGlobal("fetch", (async (url: string, init?: RequestInit) =>
       init?.method === "PUT" && failPuts-- > 0 ? new Response("bad gateway", { status: 502 }) : gh.fetchImpl(url, init)) as typeof fetch);
-    const app = await buildApp({ ai: new MockProvider(), backup: { ...cfg, debounceMs: 60_000 }, config: { ...loadConfig({}), dbPath: tempDb() } });
+    const app = await buildApp({ ai: new MockProvider(), backup: { ...cfg, debounceMs: 60_000 }, config: { ...loadConfig({ AI_PROVIDER: "mock" }), dbPath: tempDb() } });
     await app.inject({ method: "POST", url: "/api/categories", payload: { name: "Teszt", icon: "x", color: "#123456" } });
     await app.close();
     expect(gh.state.puts).toBe(1);
@@ -378,7 +378,7 @@ describe("backup and restore through the API", () => {
   it("restores into place in one step, without the journal of an earlier database", async () => {
     const gh = fakeGithub();
     vi.stubGlobal("fetch", gh.fetchImpl);
-    const seed = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath: tempDb() } });
+    const seed = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({ AI_PROVIDER: "mock" }), dbPath: tempDb() } });
     await seed.inject({ method: "POST", url: "/api/categories", payload: { name: "Mentett", icon: "x", color: "#123456" } });
     await seed.close();
 
@@ -390,7 +390,7 @@ describe("backup and restore through the API", () => {
     expect(existsSync(`${dbPath}-wal`)).toBe(false);
     expect(existsSync(`${dbPath}-shm`)).toBe(false);
     expect(existsSync(`${dbPath}.restoring`)).toBe(false);
-    const app = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath } });
+    const app = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({ AI_PROVIDER: "mock" }), dbPath } });
     expect((await app.inject("/api/categories")).json()).toEqual(expect.arrayContaining([expect.objectContaining({ name: "Mentett" })]));
     await app.close();
   });
@@ -401,7 +401,7 @@ describe("backup and restore through the API", () => {
     const app = await buildApp({
       ai: new MockProvider(),
       backup: { ...cfg, debounceMs: 60_000 },
-      config: { ...loadConfig({}), dbPath: tempDb(), apiToken: "right" },
+      config: { ...loadConfig({ AI_PROVIDER: "mock" }), dbPath: tempDb(), apiToken: "right" },
     });
     const payload = { name: "Teszt", icon: "x", color: "#123456" };
     expect((await app.inject({ method: "POST", url: "/api/categories", payload })).statusCode).toBe(401);
@@ -427,7 +427,7 @@ describe("backup and restore through the API", () => {
         return { imported: 1, skipped: 0 };
       },
     };
-    app = await buildApp({ ai: new MockProvider(), revolut, backup: { ...cfg, debounceMs: 60_000 }, config: { ...loadConfig({}), dbPath: tempDb() } });
+    app = await buildApp({ ai: new MockProvider(), revolut, backup: { ...cfg, debounceMs: 60_000 }, config: { ...loadConfig({ AI_PROVIDER: "mock" }), dbPath: tempDb() } });
     await app.listen({ port: 0, host: "127.0.0.1" });
     const { port } = app.server.address() as AddressInfo;
     await new Promise<void>((resolve) => {
@@ -497,8 +497,8 @@ describe("wrong-token rate limit", () => {
   });
 
   it("validates TRUST_PROXY_HOPS", () => {
-    expect(loadConfig({}).trustProxyHops).toBe(0);
-    expect(loadConfig({ TRUST_PROXY_HOPS: "1" }).trustProxyHops).toBe(1);
-    expect(() => loadConfig({ TRUST_PROXY_HOPS: "one" })).toThrow(/Invalid TRUST_PROXY_HOPS "one"/);
+    expect(loadConfig({ AI_PROVIDER: "mock" }).trustProxyHops).toBe(0);
+    expect(loadConfig({ AI_PROVIDER: "mock", TRUST_PROXY_HOPS: "1" }).trustProxyHops).toBe(1);
+    expect(() => loadConfig({ AI_PROVIDER: "mock", TRUST_PROXY_HOPS: "one" })).toThrow(/Invalid TRUST_PROXY_HOPS "one"/);
   });
 });

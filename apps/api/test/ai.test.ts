@@ -166,22 +166,32 @@ describe("POST /api/ai/analyze", () => {
 });
 
 describe("provider adapters (fetch stubbed, no network)", () => {
-  it("selects mock by default when no key is set", async () => {
-    const cfg = loadConfig({});
+  it("picks the provider by name or by key, and never falls back to the mock without being told to", async () => {
+    const cfg = loadConfig({ AI_PROVIDER: "mock" });
     expect(cfg.ai.provider).toBe("mock");
     expect(createAIProvider(cfg.ai).name).toBe("mock");
     expect(loadConfig({ ANTHROPIC_API_KEY: "k" }).ai.provider).toBe("anthropic");
+    expect(loadConfig({ OPENAI_API_KEY: "k" }).ai.provider).toBe("openai");
     expect(() => loadConfig({ AI_PROVIDER: "gemini" })).toThrow(/Unknown AI_PROVIDER/);
+    expect(() => loadConfig({})).toThrow(/No AI provider is set: put AI_PROVIDER=anthropic and ANTHROPIC_API_KEY/);
+    expect(() => loadConfig({ AI_PROVIDER: "", ANTHROPIC_API_KEY: "" })).toThrow(/No AI provider is set/);
+    expect(() => loadConfig({ AI_PROVIDER: "mock", ANTHROPIC_API_KEY: "k" })).toThrow(
+      "AI_PROVIDER=mock, but ANTHROPIC_API_KEY is set: set AI_PROVIDER to the provider of that key, or remove the key",
+    );
+    // A named provider without its key: the reason, at start.
+    expect(() => createAIProvider(loadConfig({ AI_PROVIDER: "anthropic", ANTHROPIC_API_KEY: "" }).ai)).toThrow(
+      "AI_PROVIDER=anthropic requires ANTHROPIC_API_KEY (or AI_API_KEY)",
+    );
   });
 
   it("validates PORT and REVOLUT_MODE instead of starting with NaN or an unknown mode", () => {
-    expect(loadConfig({}).port).toBe(8787);
-    expect(loadConfig({ PORT: " 3000 " }).port).toBe(3000);
-    expect(() => loadConfig({ PORT: "abc" })).toThrow(/Invalid PORT "abc"/);
-    expect(() => loadConfig({ PORT: "70000" })).toThrow(/Invalid PORT/);
-    expect(loadConfig({ REVOLUT_MODE: " CSV " }).revolut.mode).toBe("csv");
-    expect(loadConfig({ REVOLUT_BUSINESS_TOKEN: "t" }).revolut.mode).toBe("business-api");
-    expect(() => loadConfig({ REVOLUT_MODE: "wise" })).toThrow(/Unknown REVOLUT_MODE "wise"/);
+    expect(loadConfig({ AI_PROVIDER: "mock" }).port).toBe(8787);
+    expect(loadConfig({ AI_PROVIDER: "mock", PORT: " 3000 " }).port).toBe(3000);
+    expect(() => loadConfig({ AI_PROVIDER: "mock", PORT: "abc" })).toThrow(/Invalid PORT "abc"/);
+    expect(() => loadConfig({ AI_PROVIDER: "mock", PORT: "70000" })).toThrow(/Invalid PORT/);
+    expect(loadConfig({ AI_PROVIDER: "mock", REVOLUT_MODE: " CSV " }).revolut.mode).toBe("csv");
+    expect(loadConfig({ AI_PROVIDER: "mock", REVOLUT_BUSINESS_TOKEN: "t" }).revolut.mode).toBe("business-api");
+    expect(() => loadConfig({ AI_PROVIDER: "mock", REVOLUT_MODE: "wise" })).toThrow(/Unknown REVOLUT_MODE "wise"/);
   });
 
   it("anthropic: Messages API request shape, image/PDF blocks, refusal handling", async () => {

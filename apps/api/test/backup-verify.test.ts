@@ -67,7 +67,7 @@ function putRemote(gh: ReturnType<typeof fakeGithub>, data: Buffer, generation: 
 /** A real backup made by the server: one transaction, uploaded as generation 1. */
 async function seed(gh: ReturnType<typeof fakeGithub>) {
   vi.stubGlobal("fetch", gh.fetchImpl);
-  const app = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath: join(tempDir(), "expense.db") } });
+  const app = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({ AI_PROVIDER: "mock" }), dbPath: join(tempDir(), "expense.db") } });
   const r = await app.inject({ method: "POST", url: "/api/transactions", payload: { amount: -4785, currency: "HUF", date: "2026-10-12", merchant: "Spar" } });
   expect(r.statusCode).toBe(201);
   await app.close();
