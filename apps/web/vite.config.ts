@@ -25,6 +25,8 @@ export default defineConfig({
       selfDestroying: serviceWorker === "off",
       registerType: "autoUpdate",
       includeAssets: ["icon.svg"],
+      // The HEIC decoder (about 2 MB, lib/image.ts) loads when a HEIC photo comes, not with every install.
+      workbox: { globIgnores: ["**/libheif-bundle-*.js"] },
       manifest: {
         name: "moncsy – kiadáskövető",
         short_name: "moncsy",
