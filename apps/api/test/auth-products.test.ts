@@ -52,10 +52,10 @@ describe("API token", () => {
   });
 
   it("refuses to listen beyond localhost without a token unless told to", () => {
-    expect(assertSafeExposure(loadConfig({ HOST: "127.0.0.1" }), {})).toBeNull();
-    expect(() => assertSafeExposure(loadConfig({ HOST: "0.0.0.0" }), {})).toThrow(/API_TOKEN is not set/);
-    expect(assertSafeExposure(loadConfig({ HOST: "0.0.0.0", API_TOKEN: "x" }), {})).toBeNull();
-    expect(assertSafeExposure(loadConfig({ HOST: "0.0.0.0" }), { ALLOW_NO_AUTH: "1" })).toMatch(/anyone who can reach this port/);
+    expect(assertSafeExposure(loadConfig({ AI_PROVIDER: "mock", HOST: "127.0.0.1" }), {})).toBeNull();
+    expect(() => assertSafeExposure(loadConfig({ AI_PROVIDER: "mock", HOST: "0.0.0.0" }), {})).toThrow(/API_TOKEN is not set/);
+    expect(assertSafeExposure(loadConfig({ AI_PROVIDER: "mock", HOST: "0.0.0.0", API_TOKEN: "x" }), {})).toBeNull();
+    expect(assertSafeExposure(loadConfig({ AI_PROVIDER: "mock", HOST: "0.0.0.0" }), { ALLOW_NO_AUTH: "1" })).toMatch(/anyone who can reach this port/);
   });
 });
 

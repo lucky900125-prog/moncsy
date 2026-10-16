@@ -67,7 +67,7 @@ For hosts whose disk is wiped on restart (Render's free plan), set `BACKUP_GITHU
 | `BACKUP_ALLOW_RESET` | – | `1` = start even though the backup file was deleted or rolled back; for one start only |
 | `STATEMENT_TZ` | `Europe/Budapest` | Time zone of the wall-clock times in bank and Revolut statements |
 | `DEFAULT_CURRENCY` | `HUF` | Summary/analysis currency when a range has no transactions, and statement currency when the file has none |
-| `AI_PROVIDER` | auto | `anthropic` \| `openai` \| `ollama` \| `mock`. If unset: `anthropic` when `ANTHROPIC_API_KEY` is set, else `openai` when `OPENAI_API_KEY` is set, else `mock` |
+| `AI_PROVIDER` | by key | `anthropic` \| `openai` \| `ollama` \| `mock`. If unset: `anthropic` when `ANTHROPIC_API_KEY` is set, else `openai` when `OPENAI_API_KEY` is set, else the API refuses to start. `mock` with any AI key set refuses too, and so does `anthropic` or `openai` (official endpoint) without its key |
 | `AI_MODEL` | per provider | `claude-sonnet-5-5` / `gpt-4.1-mini` / `llama3.2-vision` |
 | `AI_API_KEY` | – | Key for the selected provider (overrides the two below) |
 | `ANTHROPIC_API_KEY` | – | Anthropic key |
@@ -130,7 +130,7 @@ All adapters use plain `fetch`, with no vendor SDKs. The callers in `src/service
 
 | Provider | Setup | Notes |
 |---|---|---|
-| **mock** (default without keys) | nothing | Deterministic and offline. `vision` returns a fixed SPAR receipt (4 785 HUF, 5 items, `groceries`). `complete` derives Hungarian insights from the aggregate it is sent |
+| **mock** | `AI_PROVIDER=mock`, no AI key | Deterministic and offline. `vision` returns a fixed SPAR receipt (4 785 HUF, 5 items, `groceries`). `complete` derives Hungarian insights from the aggregate it is sent |
 | **anthropic** | `AI_PROVIDER=anthropic`, `ANTHROPIC_API_KEY=…`, optional `AI_MODEL` (default `claude-sonnet-5-5`) | `POST https://api.anthropic.com/v1/messages`, `anthropic-version: 2023-06-01`. Images are sent as `image` blocks (JPEG/PNG/GIF/WebP) and PDFs as `document` blocks. HEIC returns 415, so convert it to JPEG first. Every request states `thinking: {type: "adaptive"}` and `output_config: {effort: "medium"}` and sends no `temperature`, which Sonnet 5.5 refuses; a model that takes neither field fails with the API's 400 in a 502. A `refusal` stop returns 502. A `max_tokens` or `model_context_window_exceeded` stop returns 422 saying the answer was cut off (thinking counts toward `max_tokens`; receipts and analyses get 16000, PDF statements 16000), as does a `length` finish from the openai and ollama adapters. Against the official endpoint the adapter also sends the server-side refusal fallback (`anthropic-beta: server-side-fallback-2026-07-01`, `fallbacks: "default"`). Set `ANTHROPIC_FALLBACKS=off` to disable it; it is skipped automatically when `AI_BASE_URL` points elsewhere |
 | **openai** | `AI_PROVIDER=openai`, `OPENAI_API_KEY=…`, optional `AI_MODEL` (default `gpt-4.1-mini`) | `POST {base}/chat/completions` with `response_format: json_object`. Images are sent as `image_url` data URLs and PDFs as `file` parts (OpenAI supports these; many compatible servers do not). HEIC is passed on as it is; a server that cannot read it answers with an error, which comes back as 502, not 415 |
 | ↳ OpenRouter | `AI_PROVIDER=openai`, `AI_BASE_URL=https://openrouter.ai/api/v1`, `AI_API_KEY=sk-or-…`, `AI_MODEL=anthropic/claude-sonnet-5-5` (any vision model) | |

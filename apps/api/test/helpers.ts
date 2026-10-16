@@ -5,7 +5,7 @@ import { loadConfig } from "../src/config.js";
 import { openDb } from "../src/db.js";
 
 export async function testApp(opts: BuildOptions = {}) {
-  const base = loadConfig({});
+  const base = loadConfig({ AI_PROVIDER: "mock" });
   return buildApp({
     db: opts.db ?? await openDb(":memory:"),
     ai: opts.ai ?? new MockProvider(),

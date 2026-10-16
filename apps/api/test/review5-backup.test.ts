@@ -44,7 +44,7 @@ describe("backup mark across an upload (review round 5)", () => {
 
   it("does not mark the database for requests that only read, such as an analysis (A1)", async () => {
     vi.stubGlobal("fetch", fakeGithub().fetchImpl);
-    const app = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath: ":memory:" } });
+    const app = await buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({ AI_PROVIDER: "mock" }), dbPath: ":memory:" } });
     await app.inject({ method: "POST", url: "/api/ai/analyze", payload: { from: "2026-10-01", to: "2026-10-31", scope: "spending" } });
     await app.inject({ method: "POST", url: "/api/statements/parse", ...multipart("k.csv", "text/csv", "Dátum;Összeg;Partner\n2026.10.01;-100;Spar\n") });
     expect(await getMeta(app.deps.db, "backup_dirty")).toBeNull();
@@ -59,7 +59,7 @@ describe("server error log (A5)", () => {
     const stream = new PassThrough();
     const lines: Record<string, unknown>[] = [];
     stream.on("data", (b: Buffer) => b.toString().split("\n").filter(Boolean).forEach((l) => lines.push(JSON.parse(l))));
-    const app = await buildApp({ ai: new MockProvider(), logger: { stream }, config: { ...loadConfig({}), dbPath: ":memory:" } });
+    const app = await buildApp({ ai: new MockProvider(), logger: { stream }, config: { ...loadConfig({ AI_PROVIDER: "mock" }), dbPath: ":memory:" } });
     app.get("/api/test-expected", async () => {
       throw new HttpError(502, "AI provider \"x\" returned HTTP 500", undefined, { cause: new Error("x answered: overloaded") });
     });

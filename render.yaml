@@ -53,5 +53,10 @@ services:
         sync: false
       - key: BACKUP_KEY
         sync: false
-      # Optional, can be added later in the dashboard: ANTHROPIC_API_KEY (or AI_PROVIDER + AI_API_KEY),
-      # REVOLUT_BUSINESS_TOKEN. Without them the API runs with the offline mock AI and Revolut CSV import.
+      # The API refuses to start without a named AI provider: anthropic with ANTHROPIC_API_KEY, or mock (sample answers,
+      # no key, and no key may be set). Asked for when the Blueprint is created, like the backup values.
+      - key: AI_PROVIDER
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      # Optional, can be added later in the dashboard: REVOLUT_BUSINESS_TOKEN. Without it Revolut is CSV import.

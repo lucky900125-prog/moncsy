@@ -10,7 +10,7 @@ describe("AI daily limit", () => {
   it("answers 429 once the day's AI calls are used up, on every route that calls the AI, and starts again the next day", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-10-14T23:59:00Z"));
-    const app = await testApp({ config: { ai: { ...loadConfig({}).ai, dailyLimit: 2 } } });
+    const app = await testApp({ config: { ai: { ...loadConfig({ AI_PROVIDER: "mock" }).ai, dailyLimit: 2 } } });
     const scan = () => app.inject({ method: "POST", url: "/api/receipts/scan", ...multipart("blokk.jpg", "image/jpeg", FAKE_JPEG) });
     const analyze = () => app.inject({ method: "POST", url: "/api/ai/analyze", payload: { from: "2026-10-01", to: "2026-10-31" } });
     const pdf = () =>
@@ -35,11 +35,11 @@ describe("AI daily limit", () => {
   });
 
   it("reads AI_DAILY_LIMIT, 100 by default, and refuses a value that is not a whole number", () => {
-    expect(loadConfig({}).ai.dailyLimit).toBe(100);
-    expect(loadConfig({ AI_DAILY_LIMIT: "0" }).ai.dailyLimit).toBe(0);
-    expect(loadConfig({ AI_DAILY_LIMIT: " 500 " }).ai.dailyLimit).toBe(500);
+    expect(loadConfig({ AI_PROVIDER: "mock" }).ai.dailyLimit).toBe(100);
+    expect(loadConfig({ AI_PROVIDER: "mock", AI_DAILY_LIMIT: "0" }).ai.dailyLimit).toBe(0);
+    expect(loadConfig({ AI_PROVIDER: "mock", AI_DAILY_LIMIT: " 500 " }).ai.dailyLimit).toBe(500);
     for (const bad of ["-1", "1.5", "lots"]) {
-      expect(() => loadConfig({ AI_DAILY_LIMIT: bad }), bad).toThrow(`Invalid AI_DAILY_LIMIT "${bad}" (expected a whole number of AI calls a day, 0 or more)`);
+      expect(() => loadConfig({ AI_PROVIDER: "mock", AI_DAILY_LIMIT: bad }), bad).toThrow(`Invalid AI_DAILY_LIMIT "${bad}" (expected a whole number of AI calls a day, 0 or more)`);
     }
   });
 });

@@ -39,7 +39,7 @@ function github() {
 
 const headers = { authorization: "Bearer right" };
 const tx = { date: "2026-10-14", amount: -100, currency: "HUF", merchant: "Spar", categoryId: null, source: "manual" };
-const start = () => buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({}), dbPath: tempDb(), apiToken: "right" } });
+const start = () => buildApp({ ai: new MockProvider(), backup: cfg, config: { ...loadConfig({ AI_PROVIDER: "mock" }), dbPath: tempDb(), apiToken: "right" } });
 const tick = () => new Promise((r) => setTimeout(r, 50));
 
 describe("a backup that keeps failing", () => {
