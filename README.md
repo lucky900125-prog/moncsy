@@ -27,7 +27,7 @@ Copy-Item .env.example .env   # a repó gyökerében
 code .env                     # vagy bármelyik szerkesztő: ANTHROPIC_API_KEY=...
 ```
 
-Ha egy beállítás mindkét fájlban szerepel, de más értékkel (az üres érték is más), az API nem indul el, és kiírja a beállítás nevét és a két fájlt; ilyenkor egy fájlban hagyd meg, a gyökér `.env` használatához töröld az `apps/api/.env`-et. A valódi környezeti változó mindkét fájlt felülírja. AI-szolgáltató nélkül sem indul: `AI_PROVIDER=anthropic` mellé `ANTHROPIC_API_KEY` kell, a mintaválaszokhoz kulcs nélkül `AI_PROVIDER=mock`. Induláskor a napló kiírja, melyik fájlokat olvasta (`settings read from …`) és melyik AI-t használja (`AI provider: …`). A `DB_PATH` relatív útja az `apps/api` mappához képest értendő (alapból `apps/api/data/expense.db`). PowerShellben ne `echo … > .env`-vel hozd létre a fájlt, mert a Windows PowerShell 5.1 UTF-16-ban írja; ilyen fájllal az API nem indul el, és UTF-8 mentést kér.
+Ha egy beállítás mindkét fájlban szerepel, de más értékkel (az üres érték is más), az API nem indul el, és kiírja a beállítás nevét és a két fájlt; ilyenkor egy fájlban hagyd meg, a gyökér `.env` használatához töröld az `apps/api/.env`-et. A valódi környezeti változó mindkét fájlt felülírja. AI-szolgáltató nélkül sem indul: `AI_PROVIDER=anthropic` mellé `ANTHROPIC_API_KEY` kell, a mintaválaszokhoz kulcs nélkül `AI_PROVIDER=mock`. Az `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` és `GEMINI_API_KEY` közül amelyik be van írva, az a szolgáltató a modelljeivel választható az app beállításaiban; az `AI_PROVIDER` és az `AI_MODEL` csak az alapérték. Induláskor a napló kiírja, melyik fájlokat olvasta (`settings read from …`) és melyik AI-t használja (`AI provider: …`). A `DB_PATH` relatív útja az `apps/api` mappához képest értendő (alapból `apps/api/data/expense.db`). PowerShellben ne `echo … > .env`-vel hozd létre a fájlt, mert a Windows PowerShell 5.1 UTF-16-ban írja; ilyen fájllal az API nem indul el, és UTF-8 mentést kér.
 
 A `pnpm-workspace.yaml` csak az ott felsorolt függőségek telepítő-szkriptjét engedi futni, és egy napnál frissebb csomagverziót nem old fel. Ha egy régebbi telepítés után a `pnpm install` `ERR_PNPM_IGNORED_BUILDS` hibával áll meg, töröld egyszer a `node_modules` mappákat (`rm -rf node_modules apps/*/node_modules packages/*/node_modules`), és telepíts újra.
 
@@ -64,7 +64,7 @@ A `render.yaml` egy Render Blueprint: az API-t az ingyenes csomagon futtatja, é
    - Ezt és az API címét a webapp és a mobilapp beállításaiban kell megadni.
 7. **AI-csere és Revolut-kulcs, később.**
    - Helyük: Render → moncsy-api → Environment.
-   - AI: `mock` helyett `AI_PROVIDER=anthropic` és `ANTHROPIC_API_KEY`, vagy más szolgáltató `AI_API_KEY`-jel (`apps/api/README.md`). `mock` mellett beállított kulccsal az API nem indul el.
+   - AI: `mock` helyett `AI_PROVIDER=anthropic` és `ANTHROPIC_API_KEY`. Az `OPENAI_API_KEY` és a `GEMINI_API_KEY` mellé is felvehető: amelyiknek van kulcsa, az a beállításokban választható. `mock` mellett beállított kulccsal az API nem indul el.
    - Revolut Business: `REVOLUT_BUSINESS_TOKEN`. Nélküle a Revolut kivonatfájlból importál.
 
 A kulcsok és tokenek csak a Render környezeti változóiban legyenek, soha ne a repóban vagy a webapp buildjében (`VITE_*`). Az ingyenes csomagon a tétlenség utáni első kérés kb. egy percig tart, mert a szerver ilyenkor indul el, és tölti vissza a mentést.

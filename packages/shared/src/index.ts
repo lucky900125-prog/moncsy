@@ -123,6 +123,32 @@ export interface AnalyzeRequest {
   scope?: "spending" | "products";
   /** scope "products" only: narrows the products sent to the AI. Matching ignores case and accents. */
   products?: ProductFilter;
+  /** one of GET /ai/providers' configured ids; left out = the server's default */
+  provider?: AIProviderId;
+  /** one of that provider's models (or any name when customModel); left out = its defaultModel */
+  model?: string;
+}
+
+export type AIProviderId = "anthropic" | "openai" | "gemini" | "ollama" | "mock";
+
+/** GET /ai/providers. Keys stay on the server; keyEnv is only the name of the variable that holds one. */
+export interface AIProvidersResponse {
+  default: { provider: string; model: string };
+  providers: AIProviderInfo[];
+}
+
+export interface AIProviderInfo {
+  id: AIProviderId;
+  label: string;
+  /** false: the server has no key for it, so it cannot be chosen */
+  configured: boolean;
+  /** the models it may be asked for, defaultModel first */
+  models: string[];
+  defaultModel: string;
+  /** true: a model name that is not on the list may be sent too */
+  customModel: boolean;
+  /** the server variable that holds its key, e.g. "GEMINI_API_KEY"; null when it needs none */
+  keyEnv: string | null;
 }
 
 export interface ProductFilter {
@@ -225,13 +251,16 @@ export interface StatementPreview {
  *  PATCH  /transactions/:id            -> Transaction
  *  DELETE /transactions/:id            -> 204
  *  GET    /summary?from&to             -> Summary
- *  POST   /receipts/scan               multipart "file" (image/jpeg|png|webp|heic, pdf) -> ReceiptScanResult
+ *  POST   /receipts/scan               multipart "file" (image/jpeg|png|webp|heic, pdf) and optional fields "provider",
+ *                                      "model" sent before the file -> ReceiptScanResult
+ *  GET    /ai/providers                -> AIProvidersResponse
  *  GET    /revolut/status              -> RevolutStatus
  *  POST   /revolut/sync                -> { imported: number; skipped: number }
  *  POST   /revolut/import-statement    multipart "file" (Revolut CSV/XLSX statement) -> { imported; skipped }
  *  POST   /ai/analyze                  AnalyzeRequest -> AnalyzeResponse
  *  POST   /statements/parse            multipart "file" (any bank's CSV/XLSX, CAMT.053 XML, OFX, MT940, PDF) and optional
- *                                      fields "mapping" (StatementMapping JSON), "currency" sent before the file -> StatementPreview
+ *                                      fields "mapping" (StatementMapping JSON), "currency", "provider", "model" (for a PDF) sent
+ *                                      before the file -> StatementPreview
  *  POST   /statements/import           { transactions: StatementTx[] } -> { imported; skipped; errors: string[] }
  *  GET    /products?from&to            -> { products: ProductStat[]; stores: StoreRank[] } (from receipt line items;
  *                                      types in "@et/shared/products")

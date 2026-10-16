@@ -42,7 +42,8 @@ if (startup.warning) app.log.warn(startup.warning);
 if (startup.restored) app.log.info(`backup: ${startup.restored}`);
 try {
   await app.listen({ port, host });
-  app.log.info(`AI provider: ${app.deps.ai.name} (${app.deps.ai.model}); Revolut mode: ${app.deps.revolut.mode}`);
+  const offered = app.deps.ai.list().providers.filter((p) => p.configured).map((p) => `${p.id} (${p.models.join(", ")})`);
+  app.log.info(`AI provider: ${app.deps.ai.default.name} (${app.deps.ai.default.model}); offered: ${offered.join("; ")}; Revolut mode: ${app.deps.revolut.mode}`);
 } catch (err) {
   app.log.error(err);
   process.exit(1);

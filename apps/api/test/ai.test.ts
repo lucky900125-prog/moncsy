@@ -172,7 +172,7 @@ describe("provider adapters (fetch stubbed, no network)", () => {
     expect(createAIProvider(cfg.ai).name).toBe("mock");
     expect(loadConfig({ ANTHROPIC_API_KEY: "k" }).ai.provider).toBe("anthropic");
     expect(loadConfig({ OPENAI_API_KEY: "k" }).ai.provider).toBe("openai");
-    expect(() => loadConfig({ AI_PROVIDER: "gemini" })).toThrow(/Unknown AI_PROVIDER/);
+    expect(() => loadConfig({ AI_PROVIDER: "grok" })).toThrow(/Unknown AI_PROVIDER "grok" \(expected anthropic|openai|gemini|ollama|mock\)/);
     expect(() => loadConfig({})).toThrow(/No AI provider is set: put AI_PROVIDER=anthropic and ANTHROPIC_API_KEY/);
     expect(() => loadConfig({ AI_PROVIDER: "", ANTHROPIC_API_KEY: "" })).toThrow(/No AI provider is set/);
     expect(() => loadConfig({ AI_PROVIDER: "mock", ANTHROPIC_API_KEY: "k" })).toThrow(

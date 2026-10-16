@@ -59,11 +59,14 @@ export async function aiRoutes(app: FastifyInstance, { repo, ai, config }: AppDe
         throw badRequest(`The image is not a readable ${format.format}: ${(e as Error).message}`);
       }
     }
-    return scanReceipt(ai, await repo.listCategories(), image.toString("base64"), mime);
+    return scanReceipt(ai.pick(file.fields.provider, file.fields.model), await repo.listCategories(), image.toString("base64"), mime);
   });
 
+  app.get("/ai/providers", async () => ai.list());
+
   app.post("/ai/analyze", { config: { readOnly: true } }, async (req) => {
-    const body = parseOrThrow(analyzeRequestSchema, req.body, "analyze request");
+    const { provider, model: modelName, ...body } = parseOrThrow(analyzeRequestSchema, req.body, "analyze request");
+    const model = ai.pick(provider, modelName);
     const txs = await repo.listTransactions({ from: body.from, to: body.to });
     if (body.scope === "products") {
       const agg = productAggregate(txs, toIso(body.from), rangeEnd(body.to), body.products);
@@ -75,9 +78,9 @@ export async function aiRoutes(app: FastifyInstance, { repo, ai, config }: AppDe
             : "No receipt line items in this period yet; scan receipts to compare product prices.",
         );
       }
-      return analyze(ai, body, agg);
+      return analyze(model, body, agg);
     }
     const agg = aggregate(txs, await repo.listCategories(), toIso(body.from), rangeEnd(body.to), config.defaultCurrency);
-    return analyze(ai, body, agg);
+    return analyze(model, body, agg);
   });
 }

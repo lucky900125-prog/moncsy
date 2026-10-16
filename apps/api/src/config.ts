@@ -1,6 +1,17 @@
 import { readFileSync } from "node:fs";
+import { CATALOG } from "./ai/catalog.js";
 
-export type AIProviderName = "anthropic" | "openai" | "ollama" | "mock";
+export type AIProviderName = "anthropic" | "openai" | "gemini" | "ollama" | "mock";
+
+/** A provider this server can call: it has its key (or needs none), and the models it may be asked for. */
+export interface AIProviderConfig {
+  name: AIProviderName;
+  apiKey: string | undefined;
+  baseUrl: string | undefined;
+  /** the models offered, the default first */
+  models: string[];
+  customModel: boolean;
+}
 export type RevolutMode = "business-api" | "open-banking" | "csv";
 
 export interface AppConfig {
@@ -16,8 +27,11 @@ export interface AppConfig {
   /** time zone of the wall-clock times written in bank statements */
   statementTz: string;
   ai: {
+    /** the default provider, used when a request names none */
     provider: AIProviderName;
     model: string | undefined;
+    /** every provider with a key, the default first; only the mock when the default is the mock */
+    providers: AIProviderConfig[];
     apiKey: string | undefined;
     baseUrl: string | undefined;
     anthropicFallbacks: boolean;
@@ -33,18 +47,38 @@ export interface AppConfig {
 
 function pickAIProvider(env: NodeJS.ProcessEnv): AIProviderName {
   const explicit = env.AI_PROVIDER?.trim().toLowerCase();
-  if (explicit === "anthropic" || explicit === "openai" || explicit === "ollama" || explicit === "mock") {
-    return explicit;
-  }
-  if (explicit) throw new Error(`Unknown AI_PROVIDER "${explicit}" (expected anthropic|openai|ollama|mock)`);
+  if (explicit && explicit in CATALOG) return explicit as AIProviderName;
+  if (explicit) throw new Error(`Unknown AI_PROVIDER "${explicit}" (expected ${Object.keys(CATALOG).join("|")})`);
   // No explicit provider: a key picks it. Without one the API refuses to start rather than answer with the
   // mock's sample data, which looks like a working AI until someone reads the "mock" badge.
   if (env.ANTHROPIC_API_KEY) return "anthropic";
   if (env.OPENAI_API_KEY) return "openai";
+  if (env.GEMINI_API_KEY) return "gemini";
   throw new Error(
-    "No AI provider is set: put AI_PROVIDER=anthropic and ANTHROPIC_API_KEY in .env (or AI_PROVIDER=openai and " +
-      "OPENAI_API_KEY), or AI_PROVIDER=mock for sample answers without a key",
+    "No AI provider is set: put AI_PROVIDER=anthropic and ANTHROPIC_API_KEY in .env (or openai with OPENAI_API_KEY, " +
+      "or gemini with GEMINI_API_KEY), or AI_PROVIDER=mock for sample answers without a key",
   );
+}
+
+/**
+ * The default provider takes AI_API_KEY, AI_BASE_URL and AI_MODEL; every other provider with its own key is offered too.
+ * A model named in AI_MODEL that is not on the list joins it, since someone asked for it by name.
+ */
+function pickAIProviders(env: NodeJS.ProcessEnv, provider: AIProviderName): AIProviderConfig[] {
+  const entry = (name: AIProviderName, isDefault: boolean): AIProviderConfig | null => {
+    const c = CATALOG[name];
+    const apiKey = (isDefault ? env.AI_API_KEY : undefined) || (c.keyEnv ? env[c.keyEnv] : undefined) || undefined;
+    const baseUrl = (isDefault ? env.AI_BASE_URL : undefined) || c.baseUrl;
+    if (!isDefault && (!c.keyEnv || !apiKey)) return null;
+    const model = isDefault ? env.AI_MODEL?.trim() : undefined;
+    const models = model && !c.models.includes(model) ? [model, ...c.models] : model ? [model, ...c.models.filter((m) => m !== model)] : c.models;
+    // Another endpoint (OpenRouter, LM Studio) has models of its own, which no list here can name.
+    return { name, apiKey, baseUrl, models, customModel: c.customModel || (isDefault && !!env.AI_BASE_URL) };
+  };
+  const first = entry(provider, true)!;
+  if (provider === "mock") return [first];
+  const others = (["anthropic", "openai", "gemini"] as const).filter((n) => n !== provider).map((n) => entry(n, false));
+  return [first, ...others.filter((o): o is AIProviderConfig => o !== null)];
 }
 
 function pickRevolutMode(env: NodeJS.ProcessEnv): RevolutMode {
@@ -114,10 +148,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const provider = pickAIProvider(env);
   const apiKey =
     env.AI_API_KEY ||
-    (provider === "anthropic" ? env.ANTHROPIC_API_KEY : provider === "openai" ? env.OPENAI_API_KEY : undefined);
-  const keyNames = ["AI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"].filter((k) => env[k]);
+    (CATALOG[provider].keyEnv ? env[CATALOG[provider].keyEnv!] : undefined);
+  const keyNames = ["AI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"].filter((k) => env[k]);
   if (provider === "mock" && keyNames.length) {
     throw new Error(`AI_PROVIDER=mock, but ${keyNames.join(", ")} is set: set AI_PROVIDER to the provider of that key, or remove the key`);
+  }
+  // An OpenAI-compatible server elsewhere (LM Studio) may need no key; the official endpoints all do.
+  const keyEnv = CATALOG[provider].keyEnv;
+  if (keyEnv && !apiKey && !(provider === "openai" && env.AI_BASE_URL)) {
+    throw new Error(`AI_PROVIDER=${provider} requires ${keyEnv} (or AI_API_KEY)`);
   }
   return {
     port: pickPort(env),
@@ -131,6 +170,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ai: {
       provider,
       model: env.AI_MODEL || undefined,
+      providers: pickAIProviders(env, provider),
       apiKey: apiKey || undefined,
       baseUrl: env.AI_BASE_URL || undefined,
       anthropicFallbacks: (env.ANTHROPIC_FALLBACKS || "on").toLowerCase() !== "off",

@@ -22,7 +22,7 @@ export async function coreRoutes(app: FastifyInstance, { repo, ai, config, backu
     if (!isAuthorized(config, req)) return base;
     return {
       ...base,
-      ai: { provider: ai.name, model: ai.model },
+      ai: { provider: ai.default.name, model: ai.default.model },
       revolut: { mode: config.revolut.mode },
       backup: backup?.getStatus() ?? NO_BACKUP,
     };
