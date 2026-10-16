@@ -9,7 +9,7 @@ import { ReceiptItems } from "@/components/receipt-items";
 import { useApp, useCategoryMap } from "@/store/app";
 import { useUi } from "@/store/ui";
 import { money, shortDate } from "@/lib/format";
-import { shrinkImage } from "@/lib/image";
+import { isHeic, shrinkImage } from "@/lib/image";
 import { cn } from "@/lib/utils";
 
 type Phase = "idle" | "scanning" | "done" | "error";
@@ -45,10 +45,14 @@ export function ScanPage() {
     const id = ++reqId.current;
     setError(null);
     setResult(null);
-    setPreview(file.type.startsWith("image/") ? URL.createObjectURL(file) : null);
+    // Only Safari can show a HEIC, so it is previewed from its JPEG once converted, as is an image without a type.
+    const direct = file.type.startsWith("image/") && !isHeic(file);
+    setPreview(direct ? URL.createObjectURL(file) : null);
     setPhase("scanning");
     try {
       const small = await shrinkImage(file);
+      if (id !== reqId.current) return;
+      if (!direct && small.type === "image/jpeg") setPreview(URL.createObjectURL(small));
       const r = await backend.scanReceipt(small);
       if (id !== reqId.current) return;
       setResult(r);
