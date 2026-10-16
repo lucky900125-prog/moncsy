@@ -1,7 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
-import type { AnalyzeRequest, AnalyzeResponse, BackupStatus, Category, ReceiptScanResult, Transaction } from "@et/shared";
+import type { AIProvidersResponse, AnalyzeRequest, AnalyzeResponse, BackupStatus, Category, ReceiptScanResult, Transaction } from "@et/shared";
 
 const KEY = "moncsy-api";
 // On a phone "localhost" is the phone itself, so the API address must be set (or baked in via EXPO_PUBLIC_API_URL).
@@ -60,6 +60,29 @@ export async function setApiToken(value: string) {
 
 export class ApiError extends Error {}
 
+/** The AI service and model picked in Settings, sent with every analysis and receipt scan; none means the server's default. */
+export type AiChoice = { provider: string; model: string };
+const AI_KEY = "moncsy-ai";
+let aiChoice: AiChoice | null | undefined;
+
+export async function getAiChoice() {
+  if (aiChoice === undefined) {
+    try {
+      const v = JSON.parse((await AsyncStorage.getItem(AI_KEY)) ?? "null") as Partial<AiChoice> | null;
+      aiChoice = v && typeof v.provider === "string" && typeof v.model === "string" ? { provider: v.provider, model: v.model } : null;
+    } catch {
+      aiChoice = null; // an unreadable value: the server's default
+    }
+  }
+  return aiChoice;
+}
+
+export async function setAiChoice(c: AiChoice | null) {
+  if (c) await AsyncStorage.setItem(AI_KEY, JSON.stringify(c));
+  else await AsyncStorage.removeItem(AI_KEY);
+  aiChoice = c;
+}
+
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const root = await getApiUrl();
   if (!root) throw new ApiError("Nincs beállítva az API címe. Add meg a Beállításokban.");
@@ -102,9 +125,14 @@ export const api = {
   createTransaction: (t: Omit<Transaction, "id">) => call<Transaction>("/transactions", json("POST", t)),
   updateTransaction: (id: string, t: Partial<Transaction>) => call<Transaction>(`/transactions/${id}`, json("PATCH", t)),
   deleteTransaction: (id: string) => call<void>(`/transactions/${id}`, { method: "DELETE" }),
-  analyze: (req: AnalyzeRequest) => call<AnalyzeResponse>("/ai/analyze", json("POST", req)),
-  scanReceipt: (uri: string, mime: string, name: string) => {
+  aiProviders: () => call<AIProvidersResponse>("/ai/providers"),
+  analyze: async (req: AnalyzeRequest) =>
+    call<AnalyzeResponse>("/ai/analyze", json("POST", { ...req, ...((await getAiChoice()) as Pick<AnalyzeRequest, "provider" | "model"> | null) })),
+  scanReceipt: async (uri: string, mime: string, name: string) => {
     const fd = new FormData();
+    // The server reads text fields only when they come before the file.
+    const ai = await getAiChoice();
+    if (ai) { fd.append("provider", ai.provider); fd.append("model", ai.model); }
     // React Native's FormData takes a { uri, type, name } file descriptor.
     fd.append("file", { uri, type: mime, name } as unknown as Blob);
     return call<ReceiptScanResult>("/receipts/scan", { method: "POST", body: fd });

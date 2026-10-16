@@ -1,8 +1,9 @@
 import type {
-  AnalyzeRequest, AnalyzeResponse, BackupStatus, Category, ReceiptScanResult, RevolutStatus, StatementMapping, StatementPreview, StatementTx,
+  AIProvidersResponse, AnalyzeRequest, AnalyzeResponse, BackupStatus, Category, ReceiptScanResult, RevolutStatus, StatementMapping, StatementPreview, StatementTx,
   Transaction,
 } from "@et/shared";
 import { demoBackend } from "./demo";
+import { getAiChoice } from "./ai-choice";
 
 export type ImportResult = { imported: number; skipped: number; errors?: string[] };
 export type TxQuery = { from?: string; to?: string; categoryId?: string; q?: string };
@@ -19,6 +20,8 @@ export interface Backend {
   deleteTransaction(id: string): Promise<void>;
   scanReceipt(file: File): Promise<ReceiptScanResult>;
   analyze(req: AnalyzeRequest): Promise<AnalyzeResponse>;
+  /** The AI services and models the server offers, for Settings. */
+  aiProviders(): Promise<AIProvidersResponse>;
   revolutStatus(): Promise<RevolutStatus>;
   revolutSync(): Promise<ImportResult>;
   revolutImportStatement(file: File): Promise<ImportResult>;
@@ -100,6 +103,12 @@ const upload = (file: File, fields: Record<string, string | undefined> = {}): Re
   return { method: "POST", body: fd };
 };
 
+/** The service and model picked in Settings, sent with every AI call; none sent means the server's default. */
+const aiFields = (): { provider?: AnalyzeRequest["provider"]; model?: string } => {
+  const c = getAiChoice();
+  return c ? { provider: c.provider as AnalyzeRequest["provider"], model: c.model } : {};
+};
+
 const qs = (q: Record<string, string | undefined> = {}) => {
   const p = new URLSearchParams(Object.entries(q).filter(([, v]) => v) as [string, string][]);
   const s = p.toString();
@@ -116,14 +125,15 @@ export const apiBackend: Backend = {
   createTransaction: (t) => call("/transactions", json("POST", t)),
   updateTransaction: (id, patch) => call(`/transactions/${id}`, json("PATCH", patch)),
   deleteTransaction: (id) => call(`/transactions/${id}`, { method: "DELETE" }),
-  scanReceipt: (file) => call("/receipts/scan", upload(file)),
-  analyze: (req) => call("/ai/analyze", json("POST", req)),
+  scanReceipt: (file) => call("/receipts/scan", upload(file, aiFields())),
+  analyze: (req) => call("/ai/analyze", json("POST", { ...req, ...aiFields() })),
+  aiProviders: () => call("/ai/providers"),
   revolutStatus: () => call("/revolut/status"),
   revolutSync: () => call("/revolut/sync", { method: "POST" }),
   revolutImportStatement: (file) => call("/revolut/import-statement", upload(file)),
   importFile: (file) => call("/import", upload(file)),
   parseStatement: (file, opts = {}) =>
-    call("/statements/parse", upload(file, { mapping: opts.mapping ? JSON.stringify(opts.mapping) : undefined, currency: opts.currency })),
+    call("/statements/parse", upload(file, { mapping: opts.mapping ? JSON.stringify(opts.mapping) : undefined, currency: opts.currency, ...aiFields() })),
   importStatement: (transactions) => call("/statements/import", json("POST", { transactions })),
   backupStatus: () => call("/backup/status"),
   exportFile: async (format, range) => {

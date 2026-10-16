@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Text, TextInput } from "react-native";
 import { Button, Card, Label, Screen, useTheme } from "@/components/ui";
+import { AiCard } from "@/components/ai-card";
 import { api, getApiToken, getApiUrl, setApiToken, setApiUrl } from "@/lib/api";
 import { useData } from "@/lib/data";
 import { backupHealth } from "@/lib/backup";
@@ -17,13 +18,15 @@ export default function Settings() {
   const [busy, setBusy] = useState(false);
   const [backup, setBackup] = useState<BackupStatus | null>(null);
   const [backupError, setBackupError] = useState<string | null>(null);
+  // Counts successful connection checks; the AI card asks the server for its services again on each.
+  const [connected, setConnected] = useState(0);
 
   useEffect(() => {
     getApiUrl().then(setUrl);
     getApiToken().then(setToken);
     // Without an API address there is no server and no backup to show.
     getApiUrl()
-      .then((u) => (u ? api.backupStatus() : null))
+      .then((u) => { if (u) setConnected((n) => n + 1); return u ? api.backupStatus() : null; })
       .then(setBackup, (e) => setBackupError((e as Error).message));
   }, []);
 
@@ -38,6 +41,7 @@ export default function Settings() {
       // /health carries the same BackupStatus as /backup/status, so the check needs no second request.
       setBackup(h.backup ?? null);
       setBackupError(null);
+      setConnected((n) => n + 1);
       await refresh();
     } catch (e) {
       setStatus({ ok: false, text: (e as Error).message });
@@ -86,6 +90,7 @@ export default function Settings() {
           <Text className={`text-sm ${status.ok ? "text-positive dark:text-positive-dark" : "text-danger dark:text-danger-dark"}`}>{status.text}</Text>
         ) : null}
       </Card>
+      {connected > 0 ? <AiCard reload={connected} /> : null}
       {backup || backupError ? <BackupCard status={backup} error={backupError} /> : null}
     </Screen>
   );
