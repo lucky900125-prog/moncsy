@@ -6,6 +6,7 @@ import { badRequest } from "../errors.js";
 import { decodeText, detectDelimiter } from "../io/text.js";
 import { fromExcelSerial, isCalendarDate, zonedToUtc } from "../statements/dates.js";
 import { assertStatementRows, assertTextStatementSize } from "../statements/limits.js";
+import { detectDecimal, fold, parseAmount, parseStatementDate, type DecimalSep } from "../statements/values.js";
 import type { Repository } from "../repository.js";
 import { categorize } from "./categorize.js";
 import { busiestSheet, cellValue, readWorkbook, type SheetCell } from "../io/xlsx.js";
@@ -36,18 +37,79 @@ export interface ParsedStatementTx {
   row: StatementRow;
 }
 
+/**
+ * The header words of each export language a source shows: English (the app's own export), Hungarian (an export the
+ * owner sent, 2026-10-16) and Czech (https://git.vitexsoftware.com/MultiFlexi/AbraFlexi-Revolut, README, "Czech
+ * Format"). Neither translation translates "State". Compared folded (no case, no accents). Any other language is read
+ * by the column order instead (revolutLayout).
+ */
 const HEADER_ALIASES: Record<keyof StatementRow, string[]> = {
-  type: ["type"],
-  product: ["product"],
-  startedDate: ["started date", "started_date"],
-  completedDate: ["completed date", "completed_date"],
-  description: ["description"],
-  amount: ["amount"],
-  fee: ["fee"],
-  currency: ["currency"],
+  type: ["type", "típus", "typ"],
+  product: ["product", "termék", "produkt"],
+  startedDate: ["started date", "started_date", "kezdés dátuma", "datum zahájení"],
+  completedDate: ["completed date", "completed_date", "teljesítés dátuma", "datum dokončení"],
+  description: ["description", "leírás", "popis"],
+  amount: ["amount", "összeg", "částka"],
+  fee: ["fee", "díj", "poplatek"],
+  currency: ["currency", "pénznem", "měna"],
   state: ["state"],
-  balance: ["balance"],
+  balance: ["balance", "egyenleg", "zůstatek"],
 };
+
+/** Revolut's column order, the same whatever the language of the header. */
+const COLUMN_ORDER: (keyof StatementRow)[] = ["type", "product", "startedDate", "completedDate", "description", "amount", "fee", "currency", "state", "balance"];
+const REQUIRED = ["startedDate", "description", "amount", "currency"] as const;
+
+/** "Completed" in the languages a source shows (English, Czech). */
+const COMPLETED_STATES = new Set(["completed", "dokonceno"]);
+/** Revolut's English states for a transaction that is not final. */
+const OPEN_STATES = new Set(["pending", "reverted", "declined", "failed"]);
+/** Revolut's English types for the translated ones a source shows (Czech), so categories and the exchange rule apply. */
+const TYPE_ALIASES = new Map([
+  ["dobijeni", "TOPUP"],
+  ["platba kartou", "CARD_PAYMENT"],
+  ["poplatek", "FEE"],
+  ["prevod", "TRANSFER"],
+  ["vraceni penez na kartu", "CARD_REFUND"],
+]);
+
+type Layout = Partial<Record<keyof StatementRow, number>>;
+
+function byHeaderWords(names: string[]): Layout {
+  const layout: Layout = {};
+  for (const field of COLUMN_ORDER) {
+    const i = names.findIndex((n) => HEADER_ALIASES[field].some((a) => fold(a) === n));
+    if (i >= 0) layout[field] = i;
+  }
+  return layout;
+}
+
+/** A first row that has a date third, an amount sixth and a currency code eighth, as Revolut writes them. */
+function fitsColumnOrder(row: unknown[] | undefined): boolean {
+  if (!row) return false;
+  try {
+    revolutDate(row[2], "UTC");
+    return parseAmount(row[5], detectDecimal([row[5]])) !== null && /^[A-Za-z]{3}$/.test(String(row[7] ?? "").trim());
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Which column (by index) holds which field: by the header words of a language above, or else, for a header of ten
+ * columns in any other language, by Revolut's column order when the first row fits it. Null when the file is not a
+ * Revolut statement.
+ */
+export function revolutLayout(header: unknown[], first?: unknown[]): Layout | null {
+  const names = header.map((c) => fold(String(c ?? "").replace(/^\uFEFF/, "")));
+  while (names.length && !names[names.length - 1]) names.pop();
+  const layout = byHeaderWords(names);
+  if (REQUIRED.every((f) => layout[f] !== undefined)) return layout;
+  if (names.length === COLUMN_ORDER.length && names.every(Boolean) && fitsColumnOrder(first)) {
+    return Object.fromEntries(COLUMN_ORDER.map((f, i) => [f, i]));
+  }
+  return null;
+}
 
 /**
  * Revolut writes local wall-clock time without an offset ("2026-10-01 08:15:42").
@@ -62,6 +124,8 @@ export function revolutDate(v: unknown, timeZone: string): string {
     return zonedToUtc(v.getUTCFullYear(), v.getUTCMonth() + 1, v.getUTCDate(), v.getUTCHours(), v.getUTCMinutes(), v.getUTCSeconds(), timeZone).toISOString();
   }
   const s = String(v ?? "").trim();
+  // A statement saved again from a spreadsheet in most European languages writes the day first: "01.10.2026 08:15".
+  if (/^\d{1,2}[./-] ?\d{1,2}[./-] ?\d{4}/.test(s)) return parseStatementDate(s, "dmy", timeZone);
   const m = s.match(/^(\d{4})(?:-|\. ?)(\d{1,2})(?:-|\. ?)(\d{1,2})\.?(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
   if (m) {
     const [, y, mo, d, h = "0", mi = "0", sec = "0"] = m;
@@ -74,49 +138,62 @@ export function revolutDate(v: unknown, timeZone: string): string {
   return new Date(t).toISOString();
 }
 
-function toNum(v: unknown, field: string, required: boolean): number | null {
-  if (v === null || v === undefined || String(v).trim() === "") {
-    if (required) throw new Error(`missing ${field}`);
-    return null;
+function toNum(v: unknown, field: string, required: boolean, decimal: DecimalSep): number | null {
+  let n: number | null;
+  try {
+    n = parseAmount(v, decimal);
+  } catch {
+    throw new Error(`invalid ${field} "${String(v)}"`);
   }
-  if (typeof v === "number") return v;
-  const n = Number(String(v).replace(/\s/g, "").replace(",", "."));
-  if (!Number.isFinite(n)) throw new Error(`invalid ${field} "${String(v)}"`);
+  if (n === null && required) throw new Error(`missing ${field}`);
   return n;
+}
+
+/** A state "completed" in a known language, or a state word not known here on a row that has a completion date. */
+function isCompleted(state: string, completed: unknown): boolean {
+  const s = fold(state);
+  if (COMPLETED_STATES.has(s)) return true;
+  if (OPEN_STATES.has(s)) return false;
+  return completed !== undefined && completed !== null && String(completed).trim() !== "";
 }
 
 /** Validates the header first, so an empty statement is told apart from a file that is not a statement at all. */
 function normalizeRecords(records: Record<string, unknown>[], keys: string[], timeZone: string): { rows: StatementRow[]; errors: string[] } {
-  const find = (field: keyof StatementRow) => keys.find((k) => HEADER_ALIASES[field].includes(k.trim().toLowerCase()));
-  const col = Object.fromEntries((Object.keys(HEADER_ALIASES) as (keyof StatementRow)[]).map((f) => [f, find(f)])) as Record<
-    keyof StatementRow,
-    string | undefined
-  >;
-  const missing = (["startedDate", "description", "amount", "currency"] as const).filter((f) => !col[f]);
-  if (missing.length) {
+  const layout = revolutLayout(keys, records[0] && keys.map((k) => records[0]![k]));
+  if (!layout) {
+    const found = byHeaderWords(keys.map((k) => fold(k)));
+    const missing = REQUIRED.filter((f) => found[f] === undefined);
     throw badRequest(
       `Not a Revolut statement: missing column(s) ${missing.map((m) => HEADER_ALIASES[m][0]).join(", ")}. Found: ${keys.join(", ")}`,
     );
   }
+  const col = Object.fromEntries(COLUMN_ORDER.map((f) => [f, layout[f] === undefined ? undefined : keys[layout[f]!]])) as Record<
+    keyof StatementRow,
+    string | undefined
+  >;
   // Each record becomes a row or an error, and each row a transaction or an ignored one: refused by the count before any is read.
   assertStatementRows(records.length);
   const rows: StatementRow[] = [];
   const errors: string[] = [];
+  const get = (r: Record<string, unknown>, f: keyof StatementRow) => (col[f] ? r[col[f]!] : undefined);
+  // One decimal separator for the whole file, judged from every number in it ("-1.234,50" and "0,50" agree).
+  const decimal = detectDecimal(records.flatMap((r) => [get(r, "amount"), get(r, "fee"), get(r, "balance")]));
   records.forEach((r, i) => {
-    const get = (f: keyof StatementRow) => (col[f] ? r[col[f]!] : undefined);
     try {
-      const completed = get("completedDate");
+      const completed = get(r, "completedDate");
+      const type = String(get(r, "type") ?? "").trim();
+      const state = String(get(r, "state") ?? "COMPLETED").trim().toUpperCase();
       rows.push({
-        type: String(get("type") ?? "").trim(),
-        product: String(get("product") ?? "").trim(),
-        startedDate: revolutDate(get("startedDate"), timeZone),
+        type: TYPE_ALIASES.get(fold(type)) ?? type,
+        product: String(get(r, "product") ?? "").trim(),
+        startedDate: revolutDate(get(r, "startedDate"), timeZone),
         completedDate: completed === undefined || completed === null || String(completed).trim() === "" ? null : revolutDate(completed, timeZone),
-        description: String(get("description") ?? "").trim(),
-        amount: toNum(get("amount"), "Amount", true)!,
-        fee: toNum(get("fee"), "Fee", false) ?? 0,
-        currency: String(get("currency") ?? "").trim().toUpperCase(),
-        state: String(get("state") ?? "COMPLETED").trim().toUpperCase(),
-        balance: toNum(get("balance"), "Balance", false),
+        description: String(get(r, "description") ?? "").trim(),
+        amount: toNum(get(r, "amount"), "Amount", true, decimal)!,
+        fee: toNum(get(r, "fee"), "Fee", false, decimal) ?? 0,
+        currency: String(get(r, "currency") ?? "").trim().toUpperCase(),
+        state: isCompleted(state, completed) ? "COMPLETED" : state,
+        balance: toNum(get(r, "balance"), "Balance", false, decimal),
       });
     } catch (e) {
       errors.push(`Row ${i + 2}: ${(e as Error).message}`);

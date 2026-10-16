@@ -6,13 +6,12 @@ import { HttpError, badRequest } from "../errors.js";
 import { decodeText, detectDelimiter, utf16Encoding } from "../io/text.js";
 import { busiestSheet, cellValue, readWorkbook, type SheetCell } from "../io/xlsx.js";
 import type { Repository } from "../repository.js";
-import { parseStatementCsv, parseStatementSheet, toTransactions } from "../revolut/csv.js";
+import { parseStatementCsv, parseStatementSheet, revolutLayout, toTransactions } from "../revolut/csv.js";
 import { isoDate } from "../schemas.js";
 import { parseCamt, parseMt940, parseOfx } from "./formats.js";
 import { parsePdfStatement } from "./pdf.js";
 import { MAX_STATEMENT_ROWS, assertStatementRows, assertTextStatementSize } from "./limits.js";
 import { parseTabular, type Cell } from "./tabular.js";
-import { fold } from "./values.js";
 
 export interface ParseOptions {
   mapping?: StatementMapping;
@@ -23,9 +22,10 @@ export interface ParseOptions {
 
 export { decodeText, detectDelimiter };
 
-const isRevolutHeader = (cells: unknown[]) => {
-  const h = new Set(cells.map((c) => fold(String(c ?? ""))));
-  return h.has("started date") && h.has("state") && h.has("product");
+/** A Revolut statement in any language: its header words or its column order, with a product and a state column. */
+const isRevolut = (rows: unknown[][]) => {
+  const layout = revolutLayout(rows[0] ?? [], rows[1]);
+  return layout !== null && layout.product !== undefined && layout.state !== undefined;
 };
 
 function fromRevolut(rows: ReturnType<typeof parseStatementCsv>): Omit<StatementPreview, "format" | "columns" | "mapping"> {
@@ -97,7 +97,7 @@ async function readStatement(
     // The statement is the sheet with the most filled rows; banks sometimes add a cover sheet.
     const sheet = busiestSheet(await readWorkbook(file.data, "Not a readable XLSX file"));
     if (!sheet) throw badRequest("The XLSX file has no worksheets");
-    if (isRevolutHeader(sheet.rows[0] ?? [])) return { format: "revolut", ...empty, ...fromRevolut(parseStatementSheet(sheet.rows, opts.timeZone)) };
+    if (isRevolut(sheet.rows.slice(0, 2).map((r) => r.map((c, i) => (c instanceof Date || i > 0 ? c : cellValue(c)))))) return { format: "revolut", ...empty, ...fromRevolut(parseStatementSheet(sheet.rows, opts.timeZone)) };
     return { format: "xlsx", ...parseTabular(sheet.rows.map((r) => r.map(tabularCell)), opts) };
   }
 
@@ -121,7 +121,7 @@ async function readStatement(
   } catch (e) {
     throw badRequest(`Not a readable CSV file: ${(e as Error).message}`);
   }
-  if (isRevolutHeader(rows[0] ?? [])) return { format: "revolut", ...empty, ...fromRevolut(parseStatementCsv(text, opts.timeZone, delimiter)) };
+  if (isRevolut(rows)) return { format: "revolut", ...empty, ...fromRevolut(parseStatementCsv(text, opts.timeZone, delimiter)) };
   return { format: "csv", ...parseTabular(rows, opts) };
 }
 
