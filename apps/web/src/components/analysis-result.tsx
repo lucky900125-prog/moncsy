@@ -32,6 +32,16 @@ export function useAnalysis() {
   return { busy, res, error, run };
 }
 
+/** The server answers with its offline mock when it has no AI key: totals only, the question is not read. */
+function MockNotice() {
+  return (
+    <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+      Ez nem AI-elemzés: a szerveren nincs AI-kulcs beállítva, ezért csak az időszak összesítését látod, a kérdésedre nem
+      válaszol. Az ANTHROPIC_API_KEY megadása után valódi elemzést kapsz.
+    </p>
+  );
+}
+
 export function AnalysisResult({ busy, res, error }: { busy: boolean; res: AnalyzeResponse | null; error: string | null }) {
   return (
     <>
@@ -52,6 +62,7 @@ export function AnalysisResult({ busy, res, error }: { busy: boolean; res: Analy
                 <Badge>{res.provider} · {res.model}</Badge>
               </div>
               <p className="text-sm leading-relaxed">{res.summary}</p>
+              {res.provider === "mock" && <MockNotice />}
             </CardContent>
           </Card>
           <div className="grid gap-3 sm:grid-cols-2">
