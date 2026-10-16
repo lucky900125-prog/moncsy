@@ -18,6 +18,17 @@ pnpm --filter @et/mobile start
 
 Ha az API nem érhető el, a web „Demó mód”-ban fut böngészőben tárolt mintaadatokkal.
 
+### Helyi beállítások: `.env` a repó gyökerében
+
+Az API a saját mappájának (`apps/api`) `.env`-jét, majd a repó gyökerében lévő `.env`-et olvassa, ha van. A gyökérbe tett `.env` tehát elég. Mintának a gyökér `.env.example` szolgál (az AI-kulcs és pár gyakori beállítás), a teljes lista az `apps/api/.env.example`. A `.env` sosem kerül a gitbe.
+
+```powershell
+Copy-Item .env.example .env   # a repó gyökerében
+code .env                     # vagy bármelyik szerkesztő: ANTHROPIC_API_KEY=...
+```
+
+Ha egy kulcs mindkét fájlban szerepel, az `apps/api/.env` értéke számít, a valódi környezeti változó pedig mindkettőt felülírja. Induláskor a napló kiírja, melyik fájlokat olvasta (`settings read from …`). A `DB_PATH` relatív útja az `apps/api` mappához képest értendő (alapból `apps/api/data/expense.db`). PowerShellben ne `echo … > .env`-vel hozd létre a fájlt, mert a Windows PowerShell 5.1 UTF-16-ban írja, és azt a Node nem olvassa.
+
 A `pnpm-workspace.yaml` csak az ott felsorolt függőségek telepítő-szkriptjét engedi futni, és egy napnál frissebb csomagverziót nem old fel. Ha egy régebbi telepítés után a `pnpm install` `ERR_PNPM_IGNORED_BUILDS` hibával áll meg, töröld egyszer a `node_modules` mappákat (`rm -rf node_modules apps/*/node_modules packages/*/node_modules`), és telepíts újra.
 
 A `pnpm audit --audit-level high` hetente és minden függőséget módosító PR-on lefut (`.github/workflows/audit.yml`); a két elfogadott, csak a mobil eszközláncot érintő találat a `pnpm-workspace.yaml` `auditConfig` részében van, indoklással. A Dependabot hetente nyit frissítési PR-t (`.github/dependabot.yml`). Minden GitHub Action egy commitra van rögzítve (a verzió megjegyzésben), mert egy tag később más kódra mutathat; a Dependabot a commitot és a megjegyzést együtt frissíti.

@@ -1,7 +1,7 @@
-import { existsSync } from "node:fs";
+import { loadEnvFiles } from "./env-files.js";
 
-// Load ./.env when present (built into Node; real environment variables take precedence).
-if (existsSync(".env")) process.loadEnvFile(".env");
+// ./.env, then the repository root's .env, when present; real environment variables take precedence.
+const envLoaded = loadEnvFiles();
 
 const { buildApp } = await import("./app.js");
 const { assertSafeExposure, loadConfig } = await import("./config.js");
@@ -24,6 +24,7 @@ try {
 
 const app = await buildApp({ logger: true, backup });
 const { port, host } = app.deps.config;
+app.log.info(envLoaded.length ? `settings read from ${envLoaded.join(", ")}` : "no .env file; settings from the environment only");
 if (startup.warning) app.log.warn(startup.warning);
 if (startup.restored) app.log.info(`backup: ${startup.restored}`);
 try {
