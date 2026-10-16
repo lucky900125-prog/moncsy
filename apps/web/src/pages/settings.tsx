@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Segmented } from "@/components/ui/segmented";
+import { AiCard } from "@/components/ai-card";
 import { useApp } from "@/store/app";
 import { getTheme, setTheme, type Theme } from "@/lib/theme";
 import { resetDemo } from "@/lib/demo";
@@ -105,6 +106,8 @@ export function SettingsPage() {
           />
         </CardContent>
       </Card>
+
+      <AiCard />
 
       {(backup || backupError) && <BackupCard status={backup} error={backupError} />}
 

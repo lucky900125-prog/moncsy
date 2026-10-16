@@ -218,6 +218,10 @@ export const demoBackend: Backend = {
       rawText: "DEMÓ – nem valódi felismerés",
     };
   },
+  async aiProviders() {
+    // Settings shows no AI card in demo mode: the demo analysis runs in this browser.
+    throw new Error("Demó módban nincs AI-szolgáltató; az API-hoz kapcsolódva választható.");
+  },
   async analyze(req): Promise<AnalyzeResponse> {
     await sleep(900);
     const d = getDb();
