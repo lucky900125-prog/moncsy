@@ -1,7 +1,7 @@
-import { existsSync } from "node:fs";
+import { loadEnvFiles } from "./env-files.js";
 
-// Same settings as the server: ./.env when present, real environment variables first.
-if (existsSync(".env")) process.loadEnvFile(".env");
+// Same settings as the server: ./.env, then the repository root's .env, real environment variables first.
+loadEnvFiles();
 
 const { loadBackupConfig, verifyBackup } = await import("./backup.js");
 

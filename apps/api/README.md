@@ -9,7 +9,7 @@ pnpm --filter @et/api build && pnpm --filter @et/api start
 pnpm --filter @et/api test   # vitest; uses the offline mock provider, no network
 ```
 
-Copy `.env.example` to `.env`. The server loads `./.env` from its working directory at startup, and real environment variables take precedence over it.
+Copy `.env.example` to `.env`, here or in the repository root (the root `.env.example` lists the few settings a local run needs). At startup the server loads `./.env` from its working directory and then the repository root's `.env`, each when present (`src/env-files.ts`); a key in both takes the first file's value, real environment variables take precedence over both, and the log names the files it read.
 
 ## Storage
 
@@ -252,6 +252,7 @@ Elements with null or absent values are omitted. All values are read as strings 
 ```
 src/
   index.ts            entry (loads .env, listens)
+  env-files.ts        which .env files are read, and in what order
   app.ts              buildApp(): plugins, error handler, routes; injectable db/ai/revolut for tests
   config.ts db.ts repository.ts schemas.ts errors.ts
   backup.ts           encrypted off-site backup to a private GitHub repository, restore on start
